@@ -6,7 +6,7 @@ import torch
 from torch.distributions.multivariate_normal import MultivariateNormal
 from tqdm import tqdm
 
-from flows import FlowXX, RealNVP
+from flows import FlowXX, Glow, RealNVP
 from flows.utils import sample, save_plot
 
 
@@ -21,7 +21,7 @@ class Model(object):
         covar = torch.eye(n_dims, dtype=torch.float32, device=self.device)
         self.normal = MultivariateNormal(mu, covar)
 
-        self.net = FlowXX(n_dims=n_dims, n_layers=n_layers)
+        self.net = Glow(n_dims=n_dims, n_layers=n_layers)
         self.net.to(self.device)
         self.optim = torch.optim.Adam(self.net.parameters(), lr=1.0e-4)
 

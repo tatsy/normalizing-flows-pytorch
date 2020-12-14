@@ -10,6 +10,7 @@ def deriv_sigmoid(x, eps=1.0e-6):
 def deriv_logit(x, eps=1.0e-6):
     y = torch.logit(torch.clamp(x, 0.0 + eps, 1.0 - eps))
     return 1.0 / deriv_sigmoid(y, eps)
+    
 
 
 class WeightNormLinear(nn.Module):
