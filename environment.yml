@@ -1,0 +1,15 @@
+name: flows
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3
+  - tqdm
+  - numpy
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - pytorch::pytorch
+  - yapf
+  - mypy
+  - flake8
