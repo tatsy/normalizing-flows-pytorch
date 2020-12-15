@@ -18,8 +18,8 @@ class InvResBlock(nn.Module):
         )
 
     def forward(self, y, log_det_jacobians):
-        n_iters = 4
-        n_samples = 4
+        n_iters = 16
+        n_samples = 1
 
         B, C = y.size()
         g_y = self.linear(y)
@@ -36,7 +36,7 @@ class InvResBlock(nn.Module):
             ]
             w = torch.stack(new_w, dim=1)
 
-            inner = torch.einsum('bnd,bnd->bn', w, v).squeeze(-1)
+            inner = torch.einsum('bnd,bnd->bn', w, v)
             if (k + 1) % 2 == 0:
                 log_det_J += inner / k
             else:
@@ -47,7 +47,7 @@ class InvResBlock(nn.Module):
         return z, log_det_jacobians
 
     def backward(self, z, log_det_jacobians):
-        n_iters = 8
+        n_iters = 32
         y = z.clone()
         for k in range(n_iters):
             g_y = self.linear(y)

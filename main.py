@@ -32,7 +32,7 @@ class Model(object):
 
         self.net = networks[net](n_dims=n_dims, n_layers=n_layers)
         self.net.to(self.device)
-        self.optim = torch.optim.Adam(self.net.parameters(), lr=2.0e-4)
+        self.optim = torch.optim.Adam(self.net.parameters(), lr=1.0e-4)
 
     def train_on_batch(self, y):
         y = y.to(self.device)
