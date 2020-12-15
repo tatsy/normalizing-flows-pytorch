@@ -27,7 +27,7 @@ class BijectiveCoupling(nn.Module):
         z[:, self.mask != 0] = z0
         z[:, self.mask == 0] = z1
 
-        log_det_jacobians += s
+        log_det_jacobians += torch.sum(s, dim=1)
 
         return z, log_det_jacobians
 
@@ -43,7 +43,7 @@ class BijectiveCoupling(nn.Module):
         y[:, self.mask != 0] = y0
         y[:, self.mask == 0] = y1
 
-        log_det_jacobians += -s
+        log_det_jacobians -= torch.sum(s, dim=1)
 
         return y, log_det_jacobians
 
@@ -67,7 +67,7 @@ class RealNVP(nn.Module):
 
     def forward(self, y):
         z = y
-        log_det_jacobians = torch.zeros_like(y)
+        log_det_jacobians = torch.zeros_like(y[:, 0])
         for i in range(self.n_layers):
             z, log_det_jacobians = self.layers[i](z, log_det_jacobians)
 
@@ -75,7 +75,7 @@ class RealNVP(nn.Module):
 
     def backward(self, z):
         y = z
-        log_det_jacobians = torch.zeros_like(z)
+        log_det_jacobians = torch.zeros_like(z[:, 0])
         for i in reversed(range(self.n_layers)):
             y, log_det_jacobians = self.layers[i].backward(y, log_det_jacobians)
 

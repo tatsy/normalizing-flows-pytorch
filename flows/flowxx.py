@@ -40,7 +40,7 @@ class BijectiveCoupling(nn.Module):
         z[:, self.mask != 0] = z0
         z[:, self.mask == 0] = z1
 
-        return z, log_det_jacobians + log_det_J
+        return z, log_det_jacobians + torch.sum(log_det_J, dim=1)
 
     def _affine_forward(self, z0, z1):
         a = torch.tanh(self.net_a(z1)) * self.a_scale + self.a_shift
@@ -52,6 +52,7 @@ class BijectiveCoupling(nn.Module):
         log_det_jacobian = torch.zeros_like(z0)
         log_det_jacobian += torch.log(deriv_mix_log_cdf(z0, pi, mu, s))
         z0 = mix_log_cdf(z0, pi, mu, s)
+        z0 = torch.clamp(z0, 1.0e-12, 1.0 - 1.0e-12)
 
         log_det_jacobian += torch.log(deriv_logit(z0))
         z0 = torch.logit(z0)
@@ -69,7 +70,7 @@ class BijectiveCoupling(nn.Module):
         y[:, self.mask != 0] = y0
         y[:, self.mask == 0] = y1
 
-        return y, log_det_jacobians + log_det_J
+        return y, log_det_jacobians + torch.sum(log_det_J, dim=1)
 
     def _affine_backward(self, z0, z1):
         a = torch.tanh(self.net_a(z1)) * self.a_scale + self.a_shift
@@ -103,7 +104,7 @@ class BijectiveCoupling(nn.Module):
 
 
 class Flowxx(nn.Module):
-    def __init__(self, n_dims, n_layers=8, n_mix=8):
+    def __init__(self, n_dims, n_layers=4, n_mix=4):
         super(Flowxx, self).__init__()
 
         self.n_dims = n_dims
@@ -114,17 +115,15 @@ class Flowxx(nn.Module):
         mask = nn.Parameter(mask, requires_grad=False)
 
         layers = []
-        masks = []
         for i in range(self.n_layers):
             m = mask if i % 2 == 0 else 1.0 - mask
             layers.append(BijectiveCoupling(n_dims, m, n_mix))
 
         self.layers = nn.ModuleList(layers)
-        self.masks = masks
 
     def forward(self, y):
         z = y
-        log_det_jacobians = torch.zeros_like(y)
+        log_det_jacobians = torch.zeros_like(y[:, 0])
         for i in range(self.n_layers):
             z, log_det_jacobians = self.layers[i](z, log_det_jacobians)
 
@@ -132,7 +131,7 @@ class Flowxx(nn.Module):
 
     def backward(self, z):
         y = z
-        log_det_jacobians = torch.zeros_like(z)
+        log_det_jacobians = torch.zeros_like(z[:, 0])
         for i in reversed(range(self.n_layers)):
             y, log_det_jacobians = self.layers[i].backward(y, log_det_jacobians)
 
