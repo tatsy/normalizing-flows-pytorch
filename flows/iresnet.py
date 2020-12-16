@@ -3,60 +3,62 @@ import torch.nn as nn
 import torch.autograd
 
 from .glow import Actnorm
-from .modules import SpectralNormLinear
+from .modules import LinearSN
 
 
 class InvResBlock(nn.Module):
-    def __init__(self, in_out_channels):
+    def __init__(self, in_out_channels, base_filters=32):
         super(InvResBlock, self).__init__()
         self.linear = nn.Sequential(
-            SpectralNormLinear(in_out_channels, in_out_channels),
-            nn.ELU(inplace=True),
-            SpectralNormLinear(in_out_channels, in_out_channels),
-            nn.ELU(inplace=True),
-            SpectralNormLinear(in_out_channels, in_out_channels),
+            nn.ELU(),
+            LinearSN(in_out_channels, base_filters),
+            nn.ELU(),
+            LinearSN(base_filters, base_filters),
+            nn.ELU(),
+            LinearSN(base_filters, in_out_channels),
         )
 
     def forward(self, y, log_det_jacobians):
-        n_iters = 16
-        n_samples = 1
+        n_iters = 8  # number of terms for approximating infinite series
+        n_samples = 1  # number of samples for Hutchinson approximation
 
         B, C = y.size()
         g_y = self.linear(y)
 
-        dims = [B, n_samples, g_y.size(1)]
-        v = torch.randn(dims).to(y.device)
+        v = torch.randn([B, n_samples, g_y.size(1)]).to(y.device)
+        w_J_fn = lambda w, y=y, g_y=g_y: torch.autograd.grad(
+            g_y, y, grad_outputs=w, retain_graph=True, create_graph=True)[0]
 
-        log_det_J = 0.0
+        log_det = 0.0
         w = v.clone()
         for k in range(1, n_iters + 1):
-            new_w = [
-                torch.autograd.grad(g_y, y, grad_outputs=w[:, i, :], retain_graph=True, create_graph=True)[0]
-                for i in range(n_samples)
-            ]
+            new_w = [w_J_fn(w[:, i, :]) for i in range(n_samples)]
             w = torch.stack(new_w, dim=1)
 
             inner = torch.einsum('bnd,bnd->bn', w, v)
             if (k + 1) % 2 == 0:
-                log_det_J += inner / k
+                log_det += inner / k
             else:
-                log_det_J -= inner / k
+                log_det -= inner / k
 
         z = y + g_y
-        log_det_jacobians = log_det_jacobians + torch.mean(log_det_J, dim=1)
+        log_det_jacobians += torch.mean(log_det, dim=1)
         return z, log_det_jacobians
 
     def backward(self, z, log_det_jacobians):
-        n_iters = 32
+        n_iters = 100
         y = z.clone()
         for k in range(n_iters):
             g_y = self.linear(y)
-            y = z - g_y
+            y, prev_y = z - g_y, y
 
-        log_det_J = torch.zeros_like(log_det_jacobians)
-        _, log_det_J = self.forward(y, log_det_J)
+            if torch.all(torch.abs(y - prev_y) < 1.0e-4):
+                break
 
-        return y, log_det_jacobians - log_det_J
+        log_det = torch.zeros_like(log_det_jacobians)
+        _, log_det = self.forward(y, log_det)
+
+        return y, log_det_jacobians - log_det
 
 
 class InvResNet(nn.Module):

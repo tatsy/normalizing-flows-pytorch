@@ -70,8 +70,10 @@ class InvertibleLinear(nn.Module):
 
     def backward(self, y, log_det_jacobians):
         with torch.no_grad():
-            LU = self.L * self.L_mask + self.U * self.U_mask + torch.diag(self.sign_s * torch.exp(self.log_s))
-            y = torch.lu_solve(y.unsqueeze(-1), LU.unsqueeze(0), self.pivots.unsqueeze(0)).squeeze(-1)
+            LU = self.L * self.L_mask + self.U * self.U_mask + torch.diag(
+                self.sign_s * torch.exp(self.log_s))
+            y = torch.lu_solve(y.unsqueeze(-1), LU.unsqueeze(0),
+                               self.pivots.unsqueeze(0)).squeeze(-1)
             log_det_jacobians -= torch.sum(self.log_s, dim=0)
 
         return y, log_det_jacobians
@@ -92,7 +94,7 @@ class Glow(nn.Module):
         linears = []
         couplings = []
         for i in range(self.n_layers):
-            m = mask if i % 2 == 0 else 1.0 - mask
+            m = mask if i % 2 == 0 else 1 - mask
             actnorms.append(Actnorm(n_dims))
             linears.append(InvertibleLinear(n_dims))
             couplings.append(BijectiveCoupling(n_dims, m))

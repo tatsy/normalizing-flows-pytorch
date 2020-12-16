@@ -1,16 +1,18 @@
 import torch
 import torch.nn as nn
 
-from .modules import Network
+from .modules import Tanh, Network, Sigmoid
 
 
 class BijectiveCoupling(nn.Module):
     def __init__(self, n_dims, mask):
         super(BijectiveCoupling, self).__init__()
 
-        n_half_dims = n_dims // 2
-        self.s_scale = nn.Parameter(torch.ones(n_half_dims, dtype=torch.float32), requires_grad=True)
-        self.s_shift = nn.Parameter(torch.zeros(n_half_dims, dtype=torch.float32), requires_grad=True)
+        n_half_dims = torch.sum(mask).long().item()
+        self.s_scale = nn.Parameter(torch.ones(n_half_dims, dtype=torch.float32),
+                                    requires_grad=True)
+        self.s_shift = nn.Parameter(torch.zeros(n_half_dims, dtype=torch.float32),
+                                    requires_grad=True)
         self.net_t = Network(n_dims - n_half_dims, n_half_dims)
         self.net_s = Network(n_dims - n_half_dims, n_half_dims)
         self.mask = nn.Parameter(mask, requires_grad=False)
@@ -60,14 +62,17 @@ class RealNVP(nn.Module):
 
         layers = []
         for i in range(self.n_layers):
-            m = mask if i % 2 == 0 else 1.0 - mask
+            m = mask if i % 2 == 0 else 1 - mask
             layers.append(BijectiveCoupling(n_dims, m))
 
+        self.in_act = Tanh()
         self.layers = nn.ModuleList(layers)
 
     def forward(self, y):
         z = y
         log_det_jacobians = torch.zeros_like(y[:, 0])
+
+        z, log_det_jacobians = self.in_act(z, log_det_jacobians)
         for i in range(self.n_layers):
             z, log_det_jacobians = self.layers[i](z, log_det_jacobians)
 
@@ -78,5 +83,7 @@ class RealNVP(nn.Module):
         log_det_jacobians = torch.zeros_like(z[:, 0])
         for i in reversed(range(self.n_layers)):
             y, log_det_jacobians = self.layers[i].backward(y, log_det_jacobians)
+
+        y, log_det_jacobians = self.in_act.backward(y, log_det_jacobians)
 
         return y, log_det_jacobians

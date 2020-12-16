@@ -1,29 +1,19 @@
 import torch
 import torch.nn as nn
 
-from .modules import Network, deriv_logit, deriv_sigmoid
-
-
-def mix_log_cdf(x, pi, mu, s):
-    x = pi * torch.sigmoid((x - mu) * torch.exp(-s))
-    x = torch.sum(x, dim=1, keepdim=True)
-    return x
-
-
-def deriv_mix_log_cdf(x, pi, mu, s):
-    w = torch.exp(-s)
-    x = pi * deriv_sigmoid((x - mu) * w) * w
-    x = torch.sum(x, dim=1, keepdim=True)
-    return x
+from .modules import Logit, Network, MixLogCDF
 
 
 class BijectiveCoupling(nn.Module):
     def __init__(self, n_dims, mask, n_mix=4):
         super(BijectiveCoupling, self).__init__()
-        n_half_dims = n_dims // 2
+        n_half_dims = torch.sum(mask).long().item()
+
         self.n_mix = n_mix
-        self.a_scale = nn.Parameter(torch.ones(n_half_dims, dtype=torch.float32), requires_grad=True)
-        self.a_shift = nn.Parameter(torch.zeros(n_half_dims, dtype=torch.float32), requires_grad=True)
+        self.a_scale = nn.Parameter(torch.ones(n_half_dims, dtype=torch.float32),
+                                    requires_grad=True)
+        self.a_shift = nn.Parameter(torch.zeros(n_half_dims, dtype=torch.float32),
+                                    requires_grad=True)
         self.net_a = Network(n_dims - n_half_dims, n_half_dims)
         self.net_b = Network(n_dims - n_half_dims, n_half_dims)
         self.net_pi = Network(n_dims - n_half_dims, n_half_dims * n_mix)
@@ -31,76 +21,62 @@ class BijectiveCoupling(nn.Module):
         self.net_s = Network(n_dims - n_half_dims, n_half_dims * n_mix)
         self.mask = mask
 
+        self.logit = Logit()
+        self.mix_log_cdf = MixLogCDF()
+
     def forward(self, z, log_det_jacobians):
         z0 = z[:, self.mask != 0]
         z1 = z[:, self.mask == 0]
-        z0, z1, log_det_J = self._affine_forward(z0, z1)
+        z0, z1, log_det_jacobians = self._affine_forward(z0, z1, log_det_jacobians)
 
         z = torch.zeros_like(z)
         z[:, self.mask != 0] = z0
         z[:, self.mask == 0] = z1
 
-        return z, log_det_jacobians + torch.sum(log_det_J, dim=1)
+        return z, log_det_jacobians
 
-    def _affine_forward(self, z0, z1):
+    def _affine_forward(self, z0, z1, log_det_jacobians):
+        B, C0 = z0.size()
         a = torch.tanh(self.net_a(z1)) * self.a_scale + self.a_shift
         b = self.net_b(z1)
-        pi = torch.softmax(self.net_pi(z1).view(-1, self.n_mix), dim=1)
-        mu = self.net_mu(z1).view(-1, self.n_mix)
-        s = self.net_s(z1).view(-1, self.n_mix)
+        pi = torch.softmax(self.net_pi(z1).view(B, C0, self.n_mix), dim=-1)
+        mu = self.net_mu(z1).view(B, C0, self.n_mix)
+        s = self.net_s(z1).view(B, C0, self.n_mix)
 
-        log_det_jacobian = torch.zeros_like(z0)
-        log_det_jacobian += torch.log(deriv_mix_log_cdf(z0, pi, mu, s))
-        z0 = mix_log_cdf(z0, pi, mu, s)
-        z0 = torch.clamp(z0, 1.0e-12, 1.0 - 1.0e-12)
+        z0, log_det_jacobians = self.mix_log_cdf(z0, pi, mu, s, log_det_jacobians)
+        z0, log_det_jacobians = self.logit(z0, log_det_jacobians)
 
-        log_det_jacobian += torch.log(deriv_logit(z0))
-        z0 = torch.logit(z0)
-
-        log_det_jacobian += a
         z0 = z0 * torch.exp(a) + b
+        log_det_jacobians += torch.sum(a, dim=1)
 
-        return z0, z1, log_det_jacobian
+        return z0, z1, log_det_jacobians
 
     def backward(self, y, log_det_jacobians):
         y0 = y[:, self.mask != 0]
         y1 = y[:, self.mask == 0]
-        y0, y1, log_det_J = self._affine_backward(y0, y1)
+        y0, y1, log_det_jacobians = self._affine_backward(y0, y1, log_det_jacobians)
+
         y = torch.zeros_like(y)
         y[:, self.mask != 0] = y0
         y[:, self.mask == 0] = y1
 
-        return y, log_det_jacobians + torch.sum(log_det_J, dim=1)
+        return y, log_det_jacobians
 
-    def _affine_backward(self, z0, z1):
+    def _affine_backward(self, z0, z1, log_det_jacobians):
+        B, C0 = z0.size()
         a = torch.tanh(self.net_a(z1)) * self.a_scale + self.a_shift
         b = self.net_b(z1)
-        pi = torch.softmax(self.net_pi(z1).view(-1, self.n_mix), dim=1)
-        mu = self.net_mu(z1).view(-1, self.n_mix)
-        s = self.net_s(z1).view(-1, self.n_mix)
+        pi = torch.softmax(self.net_pi(z1).view(B, C0, self.n_mix), dim=-1)
+        mu = self.net_mu(z1).view(B, C0, self.n_mix)
+        s = self.net_s(z1).view(B, C0, self.n_mix)
 
-        log_det_jacobian = torch.zeros_like(z0)
-        log_det_jacobian += -a
         z0 = torch.exp(-a) * (z0 - b)
+        log_det_jacobians -= torch.sum(a, dim=1)
 
-        log_det_jacobian += torch.log(deriv_sigmoid(z0))
-        z0 = torch.sigmoid(z0)
+        z0, log_det_jacobians = self.logit.backward(z0, log_det_jacobians)
+        z0, log_det_jacobians = self.mix_log_cdf.backward(z0, pi, mu, s, log_det_jacobians)
 
-        lo = torch.full_like(z0, -1.0e3)
-        hi = torch.full_like(z0, 1.0e3)
-        for it in range(100):
-            mid = (lo + hi) * 0.5
-            val = mix_log_cdf(mid, pi, mu, s)
-            lo = torch.where(val < z0, mid, lo)
-            hi = torch.where(val > z0, mid, hi)
-
-            if torch.abs(hi - lo).max() < 1.0e-5:
-                break
-
-        z0 = (lo + hi) * 0.5
-        log_det_jacobian += -1.0 * torch.log(deriv_mix_log_cdf(z0, pi, mu, s))
-
-        return z0, z1, log_det_jacobian
+        return z0, z1, log_det_jacobians
 
 
 class Flowxx(nn.Module):
@@ -116,7 +92,7 @@ class Flowxx(nn.Module):
 
         layers = []
         for i in range(self.n_layers):
-            m = mask if i % 2 == 0 else 1.0 - mask
+            m = mask if i % 2 == 0 else 1 - mask
             layers.append(BijectiveCoupling(n_dims, m, n_mix))
 
         self.layers = nn.ModuleList(layers)
