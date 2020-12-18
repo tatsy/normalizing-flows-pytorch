@@ -2,15 +2,15 @@ import os
 import time
 import shutil
 import argparse
+from itertools import cycle
 
 import numpy as np
-import scipy as sp
 import torch
-from tqdm import tqdm
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-from flows import Glow, Flowxx, RealNVP, InvResNet
-from common.utils import sample, save_plot, save_image_plot
+from flows import Glow, Ffjord, Flowxx, RealNVP, InvResNet
+from common.utils import save_plot, save_image_plot
+from flows.dataset import FlowDataset
 from common.logging import Logging
 
 networks = {
@@ -18,6 +18,7 @@ networks = {
     'glow': Glow,
     'flow++': Flowxx,
     'iresnet': InvResNet,
+    'ffjord': Ffjord,
 }
 
 # -----------------------------------------------
@@ -34,7 +35,7 @@ parser.add_argument('--steps', type=int, default=10000, help='training steps')
 parser.add_argument('--n_samples', type=int, default=1024, help='#samples to be drawn')
 parser.add_argument('--distrib',
                     default='moons',
-                    choices=['moons', 'normals', 'swiss', 's_curve'],
+                    choices=['moons', 'normals', 'swiss', 's_curve', 'mnist', 'cifar10'],
                     help='name of target distribution')
 parser.add_argument('--ckpt_path',
                     type=str,
@@ -54,17 +55,20 @@ logger = Logging(__file__)
 # train/eval model
 # -----------------------------------------------
 class Model(object):
-    def __init__(self, net='realnvp', n_dims=2, n_layers=4):
+    def __init__(self, net='realnvp', dims=(2, ), n_layers=4):
         if torch.cuda.is_available():
             self.device = torch.device('cuda', 0)
         else:
             self.device = torch.device('cpu')
 
-        mu = torch.zeros(n_dims, dtype=torch.float32, device=self.device)
-        covar = 0.25 * torch.eye(n_dims, dtype=torch.float32, device=self.device)
+        self.dims = dims
+        self.dimension = np.prod(dims)
+
+        mu = torch.zeros(self.dimension, dtype=torch.float32, device=self.device)
+        covar = 0.25 * torch.eye(self.dimension, dtype=torch.float32, device=self.device)
         self.normal = MultivariateNormal(mu, covar)
 
-        self.net = networks[net](n_dims=n_dims, n_layers=n_layers)
+        self.net = networks[net](dims=self.dims, n_layers=n_layers)
         self.net.to(self.device)
         self.optim = torch.optim.Adam(self.net.parameters(), lr=1.0e-4, weight_decay=1.0e-5)
 
@@ -73,7 +77,7 @@ class Model(object):
         self.net.train()
 
         z, log_det_jacobian = self.net(y)
-
+        z = z.view(y.size(0), -1)
         loss = -1.0 * torch.mean(self.normal.log_prob(z) + log_det_jacobian)
 
         self.optim.zero_grad()
@@ -130,9 +134,12 @@ def main():
     out_dir = os.path.join(FLAGS.output, FLAGS.network)
     os.makedirs(out_dir, exist_ok=True)
 
+    # dataset
+    dset = FlowDataset(FLAGS.distrib)
+    data_loader = torch.utils.data.DataLoader(dset, batch_size=FLAGS.n_samples, shuffle=True)
+
     # setup train/eval model
-    n_dims = sample(1, name=FLAGS.distrib).shape[1]
-    model = Model(net=FLAGS.network, n_dims=n_dims, n_layers=FLAGS.layers)
+    model = Model(net=FLAGS.network, dims=dset.dims, n_layers=FLAGS.layers)
 
     # resume from checkpoint
     start_step = 0
@@ -140,13 +147,15 @@ def main():
         start_step = model.load_ckpt(FLAGS.ckpt_path) + 1
 
     # training
-    for step in range(start_step, FLAGS.steps):
+    step = start_step
+    for data in cycle(data_loader):
         # training
         start_time = time.perf_counter()
-        y = sample(FLAGS.n_samples, name=FLAGS.distrib)
-        y = torch.tensor(y, dtype=torch.float32, requires_grad=True)
+        y = data
         z, loss = model.train_on_batch(y)
         elapsed_time = time.perf_counter() - start_time
+
+        step += 1
 
         if step % (FLAGS.display * 10) == 0:
             # logging
@@ -159,7 +168,7 @@ def main():
             y = y.detach().cpu().numpy()
             py = py.detach().cpu().numpy()
 
-            if n_dims == 2:
+            if dset.dtype == '2d':
                 # plot latent samples
                 pz = model.pz(z)
                 z = z.detach().cpu().numpy()
@@ -200,7 +209,20 @@ def main():
                 latest_file = os.path.join(out_dir, 'y_dist_latest.jpg')
                 shutil.copyfile(out_file, latest_file)
 
-            if n_dims == 3:
+            if dset.dtype == '3d':
+                # plot latent samples
+                pz = model.pz(z)
+                z = z.detach().cpu().numpy()
+                pz = pz.detach().cpu().numpy()
+                xs = z[:, 0]
+                ys = z[:, 1]
+                zs = z[:, 2]
+
+                out_file = os.path.join(out_dir, 'z_sample_{:06d}.jpg'.format(step))
+                save_plot(out_file, xs, ys, zs, colors=pz)
+                latest_file = os.path.join(out_dir, 'z_sample_latest.jpg')
+                shutil.copyfile(out_file, latest_file)
+
                 # save plot
                 xs = y[:, 0]
                 ys = y[:, 1]

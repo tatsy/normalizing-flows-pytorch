@@ -2,6 +2,7 @@
 .mypy_cache/*
 .DS_Store
 
+data/*
 outputs/*
 *.jpg
 *.png

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.nn.utils import weight_norm as WeightNorm
 
 from .spectral_norm import SpectralNorm
 
@@ -29,62 +30,72 @@ def deriv_arctanh(x, eps=1.0e-8):
 
 
 def mix_log_cdf(x, pi, mu, s):
-    x = x.unsqueeze(-1)
+    x = x.unsqueeze(1)
     x = pi * torch.sigmoid((x - mu) * torch.exp(-s))
-    x = torch.sum(x, dim=-1)
+    x = torch.sum(x, dim=1)
     return x
 
 
 def deriv_mix_log_cdf(x, pi, mu, s):
-    x = x.unsqueeze(-1)
+    x = x.unsqueeze(1)
     w = torch.exp(-s)
     x = pi * deriv_sigmoid((x - mu) * w) * w
-    x = torch.sum(x, dim=-1)
+    x = torch.sum(x, dim=1)
     return x
 
 
 class Sigmoid(nn.Module):
+
     def __init__(self):
         super(Sigmoid, self).__init__()
 
     def forward(self, x, log_det_jacobians):
-        log_det = torch.sum(torch.log(deriv_sigmoid(x)), dim=1)
+        log_det = torch.log(deriv_sigmoid(x))
+        log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
         return torch.sigmoid(x), log_det_jacobians + log_det
 
     def backward(self, x, log_det_jacobians):
         x = torch.clamp(x, 1.0e-8, 1.0 - 1.0e-8)
-        log_det = torch.sum(torch.log(deriv_logit(x)), dim=1)
+        log_det = torch.log(deriv_logit(x))
+        log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
         return torch.logit(x), log_det_jacobians + log_det
 
 
 class Logit(nn.Module):
+
     def __init__(self):
         super(Logit, self).__init__()
 
     def forward(self, x, log_det_jacobians):
         x = torch.clamp(x, 1.0e-8, 1.0 - 1.0e-8)
-        log_det = torch.sum(torch.log(deriv_logit(x)), dim=1)
+        log_det = torch.log(deriv_logit(x))
+        log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
         return torch.logit(x), log_det_jacobians + log_det
 
     def backward(self, x, log_det_jacobians):
-        log_det = torch.sum(torch.log(deriv_sigmoid(x)), dim=1)
+        log_det = torch.log(deriv_sigmoid(x))
+        log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
         return torch.sigmoid(x), log_det_jacobians + log_det
 
 
 class Tanh(nn.Module):
+
     def __init__(self):
         super(Tanh, self).__init__()
 
     def forward(self, x, log_det_jacobians):
-        log_det = torch.sum(torch.log(deriv_tanh(x)), dim=1)
+        log_det = torch.log(deriv_tanh(x))
+        log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
         return torch.tanh(x), log_det_jacobians + log_det
 
     def backward(self, x, log_det_jacobians):
-        log_det = torch.sum(torch.log(deriv_arctanh(x)), dim=1)
+        log_det = torch.log(deriv_arctanh(x))
+        log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
         return torch.arctanh(x), log_det_jacobians + log_det
 
 
 class Arctanh(nn.Module):
+
     def __init__(self):
         super(Arctanh, self).__init__()
 
@@ -98,11 +109,13 @@ class Arctanh(nn.Module):
 
 
 class MixLogCDF(nn.Module):
+
     def __init__(self):
         super(MixLogCDF, self).__init__()
 
     def forward(self, x, pi, mu, s, log_det_jacobians):
-        log_det = torch.sum(torch.log(deriv_mix_log_cdf(x, pi, mu, s)), dim=1)
+        log_det = torch.log(deriv_mix_log_cdf(x, pi, mu, s))
+        log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
         return mix_log_cdf(x, pi, mu, s), log_det_jacobians + log_det
 
     def backward(self, x, pi, mu, s, log_det_jacobians):
@@ -118,44 +131,28 @@ class MixLogCDF(nn.Module):
                 break
 
         x = (lo + hi) * 0.5
-        log_det = torch.sum(torch.log(deriv_mix_log_cdf(x, pi, mu, s)), dim=1)
+        log_det = torch.log(deriv_mix_log_cdf(x, pi, mu, s))
+        log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
 
         return x, log_det_jacobians - log_det
 
 
-class LinearWN(nn.Module):
-    def __init__(self, in_dim, out_dim, bias=True):
-        super(LinearWN, self).__init__()
-        self.conv = nn.utils.weight_norm(nn.Linear(in_dim, out_dim, bias=bias))
+class ResBlock1d(nn.Module):
 
-    def forward(self, x):
-        return self.conv(x)
-
-
-class LinearSN(nn.Module):
-    def __init__(self, in_dim, out_dim, bias=True):
-        super(LinearSN, self).__init__()
-        self.conv = SpectralNorm(nn.Linear(in_dim, out_dim, bias=bias))
-
-    def forward(self, x):
-        return self.conv(x)
-
-
-class ResBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(ResBlock, self).__init__()
+        super(ResBlock1d, self).__init__()
 
         self.net = nn.Sequential(
             nn.BatchNorm1d(in_channels),
             nn.ReLU(inplace=True),
-            LinearWN(in_channels, out_channels),
+            WeightNorm(nn.Linear(in_channels, out_channels)),
             nn.BatchNorm1d(out_channels),
             nn.ReLU(inplace=True),
-            LinearWN(out_channels, out_channels),
+            WeightNorm(nn.Linear(out_channels, out_channels)),
         )
 
         if in_channels != out_channels:
-            self.bridge = nn.Sequential(LinearWN(in_channels, out_channels))
+            self.bridge = WeightNorm(nn.Linear(in_channels, out_channels))
         else:
             self.bridge = nn.Sequential()
 
@@ -165,29 +162,109 @@ class ResBlock(nn.Module):
         return x + y
 
 
-class Network(nn.Module):
+class ResBlock2d(nn.Module):
+
+    def __init__(self, in_channels, out_channels):
+        super(ResBlock2d, self).__init__()
+
+        self.net = nn.Sequential(
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            WeightNorm(nn.Conv2d(in_channels, out_channels, 3, 1, 1)),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            WeightNorm(nn.Conv2d(out_channels, out_channels, 3, 1, 1)),
+        )
+
+        if in_channels != out_channels:
+            self.bridge = WeightNorm(nn.Conv2d(in_channels, out_channels, 3, 1, 1))
+        else:
+            self.bridge = nn.Sequential()
+
+    def forward(self, x):
+        y = self.net(x)
+        x = self.bridge(x)
+        return x + y
+
+
+class MLP(nn.Module):
+
     def __init__(self, in_channels, out_channels, base_filters=32):
-        super(Network, self).__init__()
+        super(MLP, self).__init__()
 
         self.in_block = nn.Sequential(
-            LinearWN(in_channels, base_filters),
+            WeightNorm(nn.Linear(in_channels, base_filters)),
             nn.BatchNorm1d(base_filters),
             nn.ReLU(inplace=True),
-            LinearWN(base_filters, base_filters),
+            WeightNorm(nn.Linear(base_filters, base_filters)),
         )
 
         self.mid_block = nn.Sequential(
-            ResBlock(base_filters, base_filters),
-            ResBlock(base_filters, base_filters),
+            ResBlock1d(base_filters, base_filters),
+            ResBlock1d(base_filters, base_filters),
         )
 
         self.out_block = nn.Sequential(
             nn.BatchNorm1d(base_filters),
             nn.ReLU(inplace=True),
-            LinearWN(base_filters, out_channels),
+            WeightNorm(nn.Linear(base_filters, out_channels)),
         )
 
     def forward(self, x):
         x = self.in_block(x)
         x = self.mid_block(x)
         return self.out_block(x)
+
+
+class ConvNet(nn.Module):
+
+    def __init__(self, in_channels, out_channels, base_filters=32):
+        super(ConvNet, self).__init__()
+
+        self.in_block = nn.Sequential(
+            WeightNorm(nn.Conv2d(in_channels, base_filters, 3, 1, 1)),
+            nn.BatchNorm2d(base_filters),
+            nn.ReLU(inplace=True),
+            WeightNorm(nn.Conv2d(base_filters, base_filters, 3, 1, 1)),
+        )
+
+        self.mid_block = nn.Sequential(
+            ResBlock2d(base_filters, base_filters),
+            ResBlock2d(base_filters, base_filters),
+        )
+
+        self.out_block = nn.Sequential(
+            nn.BatchNorm2d(base_filters),
+            nn.ReLU(inplace=True),
+            WeightNorm(nn.Conv2d(base_filters, out_channels, 3, 1, 1)),
+        )
+
+    def forward(self, x):
+        x = self.in_block(x)
+        x = self.mid_block(x)
+        return self.out_block(x)
+
+
+class Actnorm(nn.Module):
+
+    def __init__(self, n_channels):
+        super(Actnorm, self).__init__()
+        self.n_channels = n_channels
+        self.log_scale = nn.Parameter(torch.zeros(n_channels), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(n_channels), requires_grad=True)
+        self.initialized = False
+
+    def forward(self, z, log_det_jacobians):
+        if not self.initialized:
+            self.log_scale.data.copy_(-torch.log(z.std(0) + 1.0e-12))
+            self.bias.data.copy_(-z.mean(0))
+            self.initialized = True
+
+        z = torch.exp(self.log_scale) * z + self.bias
+        log_det_jacobians += torch.sum(self.log_scale.view(1, -1), dim=1)
+        return z, log_det_jacobians
+
+    def backward(self, y, log_det_jacobians):
+        y = (y - self.bias) * torch.exp(-self.log_scale)
+        log_det_jacobians -= torch.sum(self.log_scale.view(1, -1), dim=1)
+        return y, log_det_jacobians

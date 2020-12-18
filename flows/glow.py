@@ -5,36 +5,15 @@ import torch.nn as nn
 import scipy.linalg
 import torch.nn.functional as F
 
-from .realnvp import BijectiveCoupling
+from .modules import Actnorm
+from .coupling import AffineCoupling
 
 
-class Actnorm(nn.Module):
-    def __init__(self, n_channels):
-        super(Actnorm, self).__init__()
-        self.n_channels = n_channels
-        self.log_scale = nn.Parameter(torch.ones(n_channels))
-        self.bias = nn.Parameter(torch.zeros(n_channels))
-        self.initialized = False
+class InvertibleConv1x1(nn.Module):
+    """ invertible 1x1 convolution used in Glow """
 
-    def forward(self, z, log_det_jacobians):
-        if not self.initialized:
-            self.log_scale.data.copy_(-torch.log(z.std(0) + 1.0e-12))
-            self.bias.data.copy_(z.mean(0))
-            self.initialized = True
-
-        z = torch.exp(self.log_scale) * z + self.bias
-        log_det_jacobians += torch.sum(self.log_scale, dim=0)
-        return z, log_det_jacobians
-
-    def backward(self, y, log_det_jacobians):
-        y = (y - self.bias) * torch.exp(-self.log_scale)
-        log_det_jacobians -= torch.sum(self.log_scale, dim=0)
-        return y, log_det_jacobians
-
-
-class InvertibleLinear(nn.Module):
     def __init__(self, in_out_channels):
-        super(InvertibleLinear, self).__init__()
+        super(InvertibleConv1x1, self).__init__()
 
         W = torch.zeros((in_out_channels, in_out_channels), dtype=torch.float32)
         nn.init.orthogonal_(W)
@@ -63,7 +42,9 @@ class InvertibleLinear(nn.Module):
         U = self.U * self.U_mask + torch.diag(self.sign_s * torch.exp(self.log_s))
         W = self.P @ L @ U
 
-        z = torch.matmul(W, z.unsqueeze(-1)).squeeze(-1)
+        B = z.size(0)
+        C = z.size(1)
+        z = torch.matmul(W, z.view(B, C, -1)).view(z.size())
         log_det_jacobians += torch.sum(self.log_s, dim=0)
 
         return z, log_det_jacobians
@@ -80,24 +61,20 @@ class InvertibleLinear(nn.Module):
 
 
 class Glow(nn.Module):
-    def __init__(self, n_dims, n_layers=8):
+
+    def __init__(self, dims, n_layers=8):
         super(Glow, self).__init__()
 
-        self.n_dims = n_dims
+        self.dims = dims
         self.n_layers = n_layers
-
-        indices = torch.arange(n_dims, dtype=torch.long)
-        mask = torch.where(indices % 2 == 0, torch.ones(n_dims), torch.zeros(n_dims)).long()
-        mask = nn.Parameter(mask, requires_grad=False)
 
         actnorms = []
         linears = []
         couplings = []
         for i in range(self.n_layers):
-            m = mask if i % 2 == 0 else 1 - mask
-            actnorms.append(Actnorm(n_dims))
-            linears.append(InvertibleLinear(n_dims))
-            couplings.append(BijectiveCoupling(n_dims, m))
+            actnorms.append(Actnorm(dims))
+            linears.append(InvertibleConv1x1(dims[0]))
+            couplings.append(AffineCoupling(dims, odd=i % 2 != 0))
 
         self.actnorms = nn.ModuleList(actnorms)
         self.linears = nn.ModuleList(linears)
@@ -105,7 +82,7 @@ class Glow(nn.Module):
 
     def forward(self, y):
         z = y
-        log_det_jacobians = torch.zeros_like(y[:, 0])
+        log_det_jacobians = torch.zeros(z.size(0), dtype=torch.float32, device=z.device)
         for i in range(self.n_layers):
             # actnorm
             z, log_det_jacobians = self.actnorms[i](z, log_det_jacobians)
@@ -120,7 +97,7 @@ class Glow(nn.Module):
 
     def backward(self, z):
         y = z
-        log_det_jacobians = torch.zeros_like(z[:, 0])
+        log_det_jacobians = torch.zeros(y.size(0), dtype=torch.float32, device=y.device)
         for i in reversed(range(self.n_layers)):
             # bijective coupling
             y, log_det_jacobians = self.couplings[i].backward(y, log_det_jacobians)

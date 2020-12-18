@@ -3,46 +3,31 @@ import torch.nn as nn
 import torch.autograd
 
 from .glow import Actnorm
-from .modules import LinearSN
+from .jacobian import trace_df_dz
+from .spectral_norm import SpectralNorm
 
 
 class InvResBlock(nn.Module):
+    """ invertible residual block """
+
     def __init__(self, in_out_channels, base_filters=32):
         super(InvResBlock, self).__init__()
         self.linear = nn.Sequential(
             nn.ELU(),
-            LinearSN(in_out_channels, base_filters),
+            SpectralNorm(nn.Linear(in_out_channels, base_filters)),
             nn.ELU(),
-            LinearSN(base_filters, base_filters),
+            SpectralNorm(nn.Linear(base_filters, base_filters)),
             nn.ELU(),
-            LinearSN(base_filters, in_out_channels),
+            SpectralNorm(nn.Linear(base_filters, in_out_channels)),
         )
 
     def forward(self, y, log_det_jacobians):
-        n_iters = 8  # number of terms for approximating infinite series
-        n_samples = 1  # number of samples for Hutchinson approximation
-
         B, C = y.size()
         g_y = self.linear(y)
-
-        v = torch.randn([B, n_samples, g_y.size(1)]).to(y.device)
-        w_J_fn = lambda w, y=y, g_y=g_y: torch.autograd.grad(
-            g_y, y, grad_outputs=w, retain_graph=True, create_graph=True)[0]
-
-        log_det = 0.0
-        w = v.clone()
-        for k in range(1, n_iters + 1):
-            new_w = [w_J_fn(w[:, i, :]) for i in range(n_samples)]
-            w = torch.stack(new_w, dim=1)
-
-            inner = torch.einsum('bnd,bnd->bn', w, v)
-            if (k + 1) % 2 == 0:
-                log_det += inner / k
-            else:
-                log_det -= inner / k
+        log_det = trace_df_dz(g_y, y, method='exact')
 
         z = y + g_y
-        log_det_jacobians += torch.mean(log_det, dim=1)
+        log_det_jacobians += log_det
         return z, log_det_jacobians
 
     def backward(self, z, log_det_jacobians):
@@ -62,6 +47,7 @@ class InvResBlock(nn.Module):
 
 
 class InvResNet(nn.Module):
+
     def __init__(self, n_dims, n_layers=8):
         super(InvResNet, self).__init__()
 
