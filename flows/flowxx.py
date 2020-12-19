@@ -6,18 +6,18 @@ from .coupling import ContinuousMixtureCoupling
 
 
 class Flowxx(nn.Module):
-
-    def __init__(self, dims, n_layers=4, n_mixtures=4):
+    def __init__(self, dims, cfg=None):
         super(Flowxx, self).__init__()
 
         self.dims = dims
-        self.n_layers = n_layers
+        self.n_layers = cfg.network.layers
 
         actnorms = []
         layers = []
         for i in range(self.n_layers):
             actnorms.append(Actnorm(dims))
-            layers.append(ContinuousMixtureCoupling(dims, odd=i % 2 != 0, n_mixtures=n_mixtures))
+            layers.append(
+                ContinuousMixtureCoupling(dims, odd=i % 2 != 0, n_mixtures=cfg.network.mixtures))
 
         self.actnorms = nn.ModuleList(actnorms)
         self.layers = nn.ModuleList(layers)

@@ -45,7 +45,6 @@ def deriv_mix_log_cdf(x, pi, mu, s):
 
 
 class Sigmoid(nn.Module):
-
     def __init__(self):
         super(Sigmoid, self).__init__()
 
@@ -62,7 +61,6 @@ class Sigmoid(nn.Module):
 
 
 class Logit(nn.Module):
-
     def __init__(self):
         super(Logit, self).__init__()
 
@@ -79,7 +77,6 @@ class Logit(nn.Module):
 
 
 class Tanh(nn.Module):
-
     def __init__(self):
         super(Tanh, self).__init__()
 
@@ -95,7 +92,6 @@ class Tanh(nn.Module):
 
 
 class Arctanh(nn.Module):
-
     def __init__(self):
         super(Arctanh, self).__init__()
 
@@ -109,7 +105,6 @@ class Arctanh(nn.Module):
 
 
 class MixLogCDF(nn.Module):
-
     def __init__(self):
         super(MixLogCDF, self).__init__()
 
@@ -138,7 +133,6 @@ class MixLogCDF(nn.Module):
 
 
 class ResBlock1d(nn.Module):
-
     def __init__(self, in_channels, out_channels):
         super(ResBlock1d, self).__init__()
 
@@ -163,7 +157,6 @@ class ResBlock1d(nn.Module):
 
 
 class ResBlock2d(nn.Module):
-
     def __init__(self, in_channels, out_channels):
         super(ResBlock2d, self).__init__()
 
@@ -188,7 +181,6 @@ class ResBlock2d(nn.Module):
 
 
 class MLP(nn.Module):
-
     def __init__(self, in_channels, out_channels, base_filters=32):
         super(MLP, self).__init__()
 
@@ -217,7 +209,6 @@ class MLP(nn.Module):
 
 
 class ConvNet(nn.Module):
-
     def __init__(self, in_channels, out_channels, base_filters=32):
         super(ConvNet, self).__init__()
 
@@ -246,7 +237,6 @@ class ConvNet(nn.Module):
 
 
 class Actnorm(nn.Module):
-
     def __init__(self, n_channels):
         super(Actnorm, self).__init__()
         self.n_channels = n_channels
@@ -268,3 +258,54 @@ class Actnorm(nn.Module):
         y = (y - self.bias) * torch.exp(-self.log_scale)
         log_det_jacobians -= torch.sum(self.log_scale.view(1, -1), dim=1)
         return y, log_det_jacobians
+
+
+class BatchNorm(nn.Module):
+    def __init__(self, num_features, momentum=0.1, eps=1.0e-5):
+        super(BatchNorm, self).__init__()
+
+        self.log_gamma = nn.Parameter(torch.zeros(num_features))
+        self.beta = nn.Parameter(torch.zeros(num_features))
+        self.momentum = momentum
+        self.eps = eps
+
+        self.register_buffer('running_mean', torch.zeros(num_features))
+        self.register_buffer('running_var', torch.ones(num_features))
+
+        self.batch_mean = None
+        self.batch_var = None
+
+    def forward(self, x, log_det_jacob):
+        if self.training:
+            self.batch_mean = x.mean(0)
+            self.batch_var = (x - self.batch_mean).pow(2).mean(0) + self.eps
+
+            self.running_mean.mul_(self.momentum)
+            self.running_var.mul_(self.momentum)
+            self.running_mean.add_(self.batch_mean.detach() * (1.0 - self.momentum))
+            self.running_var.add_(self.batch_var.detach() * (1.0 - self.momentum))
+
+            mean, var = self.batch_mean, self.batch_var
+        else:
+            mean, var = self.running_mean, self.running_var
+
+        x = (x - mean) / torch.sqrt(var)
+        x = x * torch.exp(self.log_gamma) + self.beta
+        log_det = self.log_gamma - 0.5 * torch.log(var)
+        log_det_jacob += torch.sum(log_det)
+
+        return x, log_det_jacob
+
+    def backward(self, x, log_det_jacob):
+        if self.training:
+            mean, var = self.batch_mean, self.batch_var
+        else:
+            mean, var = self.running_mean, self.running_var
+
+        x = (x - self.beta) / torch.exp(self.log_gamma)
+        x = x * torch.sqrt(var) + mean
+
+        log_det = -self.log_gamma + 0.5 * torch.log(var)
+        log_det_jacob += torch.sum(log_det)
+
+        return x, log_det_jacob

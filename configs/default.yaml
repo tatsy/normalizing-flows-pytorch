@@ -1,16 +1,25 @@
+hydra:
+  run:
+    dir: logs/${network.name}_${run.distrib}_${now:%Y-%m-%d_%H-%M-%S}
+
 network:
-  - name: realnvp
-  - layers: 32
+  name: realnvp
+  layers: 32
 
 train:
-  - steps: 100000
-  - samples: 1024
+  steps: 100000
+  samples: 1024
+
+optimizer:
+  name: adam
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
 
 run:
-  - distrib: circles
-  - ckpt_path: null
-  - output: outputs
-  - display: 1
+  distrib: circles
+  ckpt_path: null
+  output: outputs
+  display: 1
 
 defaults:
   - network: realnvp

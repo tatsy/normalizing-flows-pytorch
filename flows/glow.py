@@ -11,7 +11,6 @@ from .coupling import AffineCoupling
 
 class InvertibleConv1x1(nn.Module):
     """ invertible 1x1 convolution used in Glow """
-
     def __init__(self, in_out_channels):
         super(InvertibleConv1x1, self).__init__()
 
@@ -61,12 +60,11 @@ class InvertibleConv1x1(nn.Module):
 
 
 class Glow(nn.Module):
-
-    def __init__(self, dims, n_layers=8):
+    def __init__(self, dims, cfg=None):
         super(Glow, self).__init__()
 
         self.dims = dims
-        self.n_layers = n_layers
+        self.n_layers = cfg.network.layers
 
         actnorms = []
         linears = []

@@ -2,10 +2,12 @@
 .mypy_cache/*
 .DS_Store
 
+logs/*
 data/*
 outputs/*
 *.jpg
 *.png
+*.stats
 
 *.pyc
 __pycache__/*

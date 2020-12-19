@@ -12,7 +12,6 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 
 from flows import Glow, Ffjord, Flowxx, RealNVP, InvResNet
 from common.utils import save_plot, save_image_plot
-from common.config import config_load
 from flows.dataset import FlowDataset
 from common.logging import Logging
 
@@ -49,7 +48,17 @@ class Model(object):
 
         self.net = networks[cfg.network.name](dims=self.dims, cfg=cfg)
         self.net.to(self.device)
-        self.optim = torch.optim.Adam(self.net.parameters(), lr=1.0e-4, weight_decay=1.0e-5)
+
+        if cfg.optimizer.name == 'rmsprop':
+            self.optim = torch.optim.RMSprop(self.net.parameters(),
+                                             lr=cfg.optimizer.lr,
+                                             weight_decay=cfg.optimizer.weight_decay)
+        elif cfg.optimizer.name == 'adam':
+            self.optim = torch.optim.Adam(self.net.parameters(),
+                                          lr=cfg.optimizer.lr,
+                                          weight_decay=cfg.optimizer.weight_decay)
+        else:
+            raise Exception('optimizer "%s" is currently not supported' % (cfg.optimizer.name))
 
     def train_on_batch(self, y):
         y = y.to(self.device)
@@ -119,7 +128,7 @@ def main(cfg):
     torch.backends.cudnn.benchmark = True
 
     # setup output directory
-    out_dir = os.path.join(workdir, cfg.run.output, cfg.network.name)
+    out_dir = os.path.join(workdir, cfg.run.output, cfg.network.name, cfg.run.distrib)
     os.makedirs(out_dir, exist_ok=True)
 
     # dataset

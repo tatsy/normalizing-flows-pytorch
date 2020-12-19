@@ -1,5 +1,6 @@
 name: flows
 channels:
+  - defaults
   - conda-forge
   - pytorch
 dependencies:
@@ -11,8 +12,10 @@ dependencies:
   - scikit-learn
   - matplotlib
   - pytorch::pytorch=>1.6
-  - conda-forge::hydra-core
+  - pytorch::torchvision
+  - conda-forge::hydra-core=>1.0
   - conda-forge::jupyterlab
   - yapf
+  - isort
   - mypy
   - flake8
