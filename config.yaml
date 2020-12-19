@@ -1,0 +1,13 @@
+network:
+  - name: realnvp
+  - layers: 4
+
+train:
+  - steps: 100000
+  - samples: 1024
+
+run:
+  - distrib: circles
+  - ckpt_path: null
+  - output: outputs
+  - display: 1

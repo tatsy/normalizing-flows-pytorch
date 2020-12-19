@@ -11,6 +11,8 @@ dependencies:
   - scikit-learn
   - matplotlib
   - pytorch::pytorch=>1.6
+  - conda-forge::hydra-core
+  - conda-forge::jupyterlab
   - yapf
   - mypy
   - flake8

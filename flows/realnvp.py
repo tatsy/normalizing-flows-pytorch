@@ -6,12 +6,11 @@ from .coupling import AffineCoupling
 
 
 class RealNVP(nn.Module):
-
-    def __init__(self, dims, n_layers=8):
+    def __init__(self, dims, cfg=None):
         super(RealNVP, self).__init__()
 
         self.dims = dims
-        self.n_layers = n_layers
+        self.n_layers = cfg.network.layers
 
         layers = []
         for i in range(self.n_layers):

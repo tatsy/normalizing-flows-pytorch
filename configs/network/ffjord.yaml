@@ -1,0 +1,6 @@
+# @package network
+name: ffjord
+t0: 0
+t1: 10
+stepsize: 1
+trace: hutchinson

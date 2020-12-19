@@ -6,6 +6,11 @@ import torchvision
 N_DATASET_SIZE = 65536
 
 
+def _sample_circles(n):
+    samples, _ = sklearn.datasets.make_circles(N_DATASET_SIZE, noise=0.08)
+    return samples * 0.6
+
+
 def _sample_moons(n):
     samples, _ = sklearn.datasets.make_moons(N_DATASET_SIZE, noise=0.08)
     samples = (samples - 0.5) / 2.0
@@ -45,6 +50,10 @@ class FlowDataset(torch.utils.data.Dataset):
     def __init__(self, name='moons'):
         super(FlowDataset, self).__init__()
         self.name = name
+        self.iter = 0
+        self._initialize()
+
+    def _initialize(self):
         if self.name == 'mnist':
             self.dset = torchvision.datasets.MNIST(root='./data/mnist', train=True, download=True)
             self.dims = (1, 28, 28)
@@ -55,22 +64,31 @@ class FlowDataset(torch.utils.data.Dataset):
                                                      download=True)
             self.dims = (3, 32, 32)
             self.dtype = 'image'
+        elif self.name == 'circles':
+            self.dset = _sample_circles(N_DATASET_SIZE)
+            self.dims = (2, )
+            self.dtype = '2d'
+            self.iter = N_DATASET_SIZE
         elif self.name == 'moons':
             self.dset = _sample_moons(N_DATASET_SIZE)
             self.dims = (2, )
             self.dtype = '2d'
+            self.iter = N_DATASET_SIZE
         elif self.name == 'normals':
             self.dset = _sample_normals(N_DATASET_SIZE)
             self.dims = (2, )
             self.dtype = '2d'
+            self.iter = N_DATASET_SIZE
         elif self.name == 'swiss':
             self.dset = _sample_swiss(N_DATASET_SIZE)
             self.dims = (3, )
             self.dtype = '3d'
+            self.iter = N_DATASET_SIZE
         elif self.name == 's_curve':
             self.dset = _sample_s_curve(N_DATASET_SIZE)
             self.dims = (3, )
             self.dtype = '3d'
+            self.iter = N_DATASET_SIZE
         else:
             raise Exception('unsupported type: "%s"' % self.name)
 
@@ -78,12 +96,16 @@ class FlowDataset(torch.utils.data.Dataset):
         return len(self.dset)
 
     def __getitem__(self, idx):
-        data = self.dset[idx]
         if self.dtype == 'image':
+            data = self.dset[idx]
             data = np.asarray(data[0], dtype='float32') / 255.0
             data = np.reshape(data, (self.dims[1], self.dims[2], -1))
             data = np.transpose(data, axes=(2, 0, 1))
         else:
+            self.iter -= 1
+            data = self.dset[self.iter]
             data = data.astype('float32')
+            if self.iter == 0:
+                self._initialize()
 
         return data

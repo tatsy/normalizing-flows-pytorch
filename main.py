@@ -4,12 +4,15 @@ import shutil
 import argparse
 from itertools import cycle
 
+import hydra
 import numpy as np
 import torch
+from omegaconf import OmegaConf, DictConfig
 from torch.distributions.multivariate_normal import MultivariateNormal
 
 from flows import Glow, Ffjord, Flowxx, RealNVP, InvResNet
 from common.utils import save_plot, save_image_plot
+from common.config import config_load
 from flows.dataset import FlowDataset
 from common.logging import Logging
 
@@ -22,30 +25,6 @@ networks = {
 }
 
 # -----------------------------------------------
-# FLAGs
-# -----------------------------------------------
-parser = argparse.ArgumentParser(description='Flow-based generative models')
-parser.add_argument('--network',
-                    type=str,
-                    required=True,
-                    choices=networks.keys(),
-                    help='name of network')
-parser.add_argument('--layers', type=int, default=4, help='number of transformation layers')
-parser.add_argument('--steps', type=int, default=10000, help='training steps')
-parser.add_argument('--n_samples', type=int, default=1024, help='#samples to be drawn')
-parser.add_argument('--distrib',
-                    default='moons',
-                    choices=['moons', 'normals', 'swiss', 's_curve', 'mnist', 'cifar10'],
-                    help='name of target distribution')
-parser.add_argument('--ckpt_path',
-                    type=str,
-                    default=None,
-                    help='checkpoint file to resume training')
-parser.add_argument('--output', type=str, default='outputs', help='output directory')
-parser.add_argument('--display', type=int, default=1, help='frequency for making report')
-FLAGS = parser.parse_args()
-
-# -----------------------------------------------
 # logging
 # -----------------------------------------------
 logger = Logging(__file__)
@@ -55,7 +34,7 @@ logger = Logging(__file__)
 # train/eval model
 # -----------------------------------------------
 class Model(object):
-    def __init__(self, net='realnvp', dims=(2, ), n_layers=4):
+    def __init__(self, dims=(2, ), cfg=None):
         if torch.cuda.is_available():
             self.device = torch.device('cuda', 0)
         else:
@@ -68,7 +47,7 @@ class Model(object):
         covar = 0.25 * torch.eye(self.dimension, dtype=torch.float32, device=self.device)
         self.normal = MultivariateNormal(mu, covar)
 
-        self.net = networks[net](dims=self.dims, n_layers=n_layers)
+        self.net = networks[cfg.network.name](dims=self.dims, cfg=cfg)
         self.net.to(self.device)
         self.optim = torch.optim.Adam(self.net.parameters(), lr=1.0e-4, weight_decay=1.0e-5)
 
@@ -126,25 +105,34 @@ class Model(object):
         return torch.exp(self.log_pz(z))
 
 
-def main():
+@hydra.main(config_path='configs', config_name='default')
+def main(cfg):
+    # show parameters
+    print('***** parameters ****')
+    print(OmegaConf.to_yaml(cfg))
+    print('*********************')
+    print('')
+
+    workdir = hydra.utils.get_original_cwd()
+
     # CuDNN backends
     torch.backends.cudnn.benchmark = True
 
     # setup output directory
-    out_dir = os.path.join(FLAGS.output, FLAGS.network)
+    out_dir = os.path.join(workdir, cfg.run.output, cfg.network.name)
     os.makedirs(out_dir, exist_ok=True)
 
     # dataset
-    dset = FlowDataset(FLAGS.distrib)
-    data_loader = torch.utils.data.DataLoader(dset, batch_size=FLAGS.n_samples, shuffle=True)
+    dset = FlowDataset(cfg.run.distrib)
+    data_loader = torch.utils.data.DataLoader(dset, batch_size=cfg.train.samples, shuffle=True)
 
     # setup train/eval model
-    model = Model(net=FLAGS.network, dims=dset.dims, n_layers=FLAGS.layers)
+    model = Model(dims=dset.dims, cfg=cfg)
 
     # resume from checkpoint
     start_step = 0
-    if FLAGS.ckpt_path is not None:
-        start_step = model.load_ckpt(FLAGS.ckpt_path) + 1
+    if cfg.run.ckpt_path is not None:
+        start_step = model.load_ckpt(cfg.run.ckpt_path) + 1
 
     # training
     step = start_step
@@ -157,14 +145,14 @@ def main():
 
         step += 1
 
-        if step % (FLAGS.display * 10) == 0:
+        if step % (cfg.run.display * 10) == 0:
             # logging
             logger.info('[%d/%d] loss=%.5f [%.3f s/it]' %
-                        (step, FLAGS.steps, loss.item(), elapsed_time))
+                        (step, cfg.train.steps, loss.item(), elapsed_time))
 
-        if step % (FLAGS.display * 100) == 0:
+        if step % (cfg.run.display * 100) == 0:
             # testing
-            y, py = model.sample_y(FLAGS.n_samples)
+            y, py = model.sample_y(cfg.train.samples)
             y = y.detach().cpu().numpy()
             py = py.detach().cpu().numpy()
 
