@@ -3,13 +3,12 @@ import torch.nn as nn
 import torch.autograd
 
 from .glow import Actnorm
-from .jacobian import trace_df_dz
+from .jacobian import logdet_df_dz
 from .spectral_norm import SpectralNorm
 
 
 class InvResBlock(nn.Module):
     """ invertible residual block """
-
     def __init__(self, in_out_channels, base_filters=32):
         super(InvResBlock, self).__init__()
         self.linear = nn.Sequential(
@@ -24,7 +23,7 @@ class InvResBlock(nn.Module):
     def forward(self, y, log_det_jacobians):
         B, C = y.size()
         g_y = self.linear(y)
-        log_det = trace_df_dz(g_y, y, method='exact')
+        log_det = logdet_df_dz(g_y, y)
 
         z = y + g_y
         log_det_jacobians += log_det
@@ -47,7 +46,6 @@ class InvResBlock(nn.Module):
 
 
 class InvResNet(nn.Module):
-
     def __init__(self, n_dims, n_layers=8):
         super(InvResNet, self).__init__()
 
