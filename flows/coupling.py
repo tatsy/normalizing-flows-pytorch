@@ -6,7 +6,6 @@ from .squeeze import Squeeze1d, Squeeze2d
 
 
 class AbstractCoupling(nn.Module):
-
     def __init__(self, dims, odd=False):
         super(AbstractCoupling, self).__init__()
         self.dims = dims
@@ -41,7 +40,6 @@ class AbstractCoupling(nn.Module):
 
 class AdditiveCoupling(AbstractCoupling):
     """ additive coupling used in NICE """
-
     def __init__(self, dims, odd=False):
         super(AdditiveCoupling, self).__init__(dims, odd)
         if len(dims) == 1:
@@ -66,7 +64,6 @@ class AdditiveCoupling(AbstractCoupling):
 
 class AffineCoupling(AbstractCoupling):
     """ affine coupling used in Real NVP """
-
     def __init__(self, dims, odd=False):
         super(AffineCoupling, self).__init__(dims, odd)
         if len(dims) == 1:
@@ -82,7 +79,7 @@ class AffineCoupling(AbstractCoupling):
         t = self.net_t(z1)
         s = torch.tanh(self.net_s(z1))
         z0 = z0 * torch.exp(s) + t
-        log_det_jacob += torch.sum(s.view(z.size(0), -1), dim=1)
+        log_det_jacob += torch.sum(s.view(z0.size(0), -1), dim=1)
 
         return z0, z1, log_det_jacob
 
@@ -90,14 +87,13 @@ class AffineCoupling(AbstractCoupling):
         t = self.net_t(y1)
         s = torch.tanh(self.net_s(y1))
         y0 = torch.exp(-s) * (y0 - t)
-        log_det_jacob -= torch.sum(s.view(y.size(0), -1), dim=1)
+        log_det_jacob -= torch.sum(s.view(y0.size(0), -1), dim=1)
 
         return y0, y1, log_det_jacob
 
 
 class ContinuousMixtureCoupling(AbstractCoupling):
     """ continuous mixture coupling used in Flow++ """
-
     def __init__(self, dims, odd=False, n_mixtures=4):
         super(ContinuousMixtureCoupling, self).__init__(dims, odd)
         self.n_mixtures = n_mixtures
