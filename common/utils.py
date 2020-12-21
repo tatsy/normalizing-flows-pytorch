@@ -8,6 +8,7 @@ import torch
 import torchvision
 import sklearn.datasets
 import matplotlib.pyplot as plt
+from PIL import Image
 
 
 def save_plot(filename, xs, ys, zs=None, colors=None):
@@ -34,8 +35,26 @@ def save_plot(filename, xs, ys, zs=None, colors=None):
     plt.close()
 
 
-def save_image_plot(filename, image, cmap='inferno'):
-    im = plt.imshow(image, cmap=cmap, extent=[-1, 1, -1, 1])  #, vmin=0.0, vmax=5.0)
-    plt.colorbar(im)
+def save_image_plot(filename,
+                    image,
+                    cmap='inferno',
+                    vmin=0.0,
+                    vmax=1.0,
+                    extent=[-1, 1, -1, 1],
+                    axis=True,
+                    colorbar=True):
+    im = plt.imshow(image, cmap=cmap, extent=extent, vmin=vmin, vmax=vmax)
+    if colorbar:
+        plt.colorbar(im)
+
+    if not axis:
+        plt.axis('off')
+
     plt.savefig(filename)
     plt.close()
+
+
+def save_image(filename, image):
+    image = (image * 255.0).astype('uint8')
+    image = Image.fromarray(image)
+    image.save(filename)

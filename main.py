@@ -7,11 +7,12 @@ from itertools import cycle
 import hydra
 import numpy as np
 import torch
+import torchvision
 from omegaconf import OmegaConf, DictConfig
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-from flows import Glow, Ffjord, Flowxx, RealNVP, InvResNet
-from common.utils import save_plot, save_image_plot
+from flows import Glow, Ffjord, Flowxx, RealNVP, ResFlow
+from common.utils import save_plot, save_image, save_image_plot
 from flows.dataset import FlowDataset
 from common.logging import Logging
 
@@ -19,7 +20,7 @@ networks = {
     'realnvp': RealNVP,
     'glow': Glow,
     'flow++': Flowxx,
-    'iresnet': InvResNet,
+    'resflow': ResFlow,
     'ffjord': Ffjord,
 }
 
@@ -35,7 +36,7 @@ logger = Logging(__file__)
 class Model(object):
     def __init__(self, dims=(2, ), cfg=None):
         if torch.cuda.is_available():
-            self.device = torch.device('cuda', 0)
+            self.device = torch.device('cuda', cfg.run.gpu)
         else:
             self.device = torch.device('cpu')
 
@@ -92,8 +93,11 @@ class Model(object):
     def sample_y(self, n):
         z = self.sample_z(n)
         z = z.to(self.device)
-        y, log_det_jacobians = self.net.backward(z)
-        log_p = self.normal.log_prob(z) - log_det_jacobians
+
+        with torch.no_grad():
+            y, log_det_jacobians = self.net.backward(z.view(-1, *self.dims))
+            log_p = self.normal.log_prob(z) - log_det_jacobians
+
         return y, torch.exp(log_p)
 
     def sample_z(self, n):
@@ -125,7 +129,12 @@ def main(cfg):
     workdir = hydra.utils.get_original_cwd()
 
     # CuDNN backends
-    torch.backends.cudnn.benchmark = True
+    if cfg.run.debug:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.autograd.set_detect_anomaly(True)
+    else:
+        torch.backends.cudnn.benchmark = True
 
     # setup output directory
     out_dir = os.path.join(workdir, cfg.run.output, cfg.network.name, cfg.run.distrib)
@@ -159,9 +168,9 @@ def main(cfg):
             logger.info('[%d/%d] loss=%.5f [%.3f s/it]' %
                         (step, cfg.train.steps, loss.item(), elapsed_time))
 
-        if step % (cfg.run.display * 100) == 0:
+        if step % (cfg.run.display * 500) == 0:
             # testing
-            y, py = model.sample_y(cfg.train.samples)
+            y, py = model.sample_y(max(100, cfg.train.samples))
             y = y.detach().cpu().numpy()
             py = py.detach().cpu().numpy()
 
@@ -228,6 +237,16 @@ def main(cfg):
                 out_file = os.path.join(out_dir, 'y_sample_{:06d}.jpg'.format(step))
                 save_plot(out_file, xs, ys, zs, colors=py)
                 latest_file = os.path.join(out_dir, 'y_sample_latest.jpg')
+                shutil.copyfile(out_file, latest_file)
+
+            if dset.dtype == 'image':
+                images = torch.from_numpy(y[:100])
+                images = torch.clamp(images, -1.0, 1.0) * 0.5 + 0.5
+                grid_image = torchvision.utils.make_grid(images, nrow=10, pad_value=1)
+                grid_image = grid_image.permute(1, 2, 0).numpy()
+                out_file = os.path.join(out_dir, 'y_image_{:06d}.jpg'.format(step))
+                save_image(out_file, grid_image)
+                latest_file = os.path.join(out_dir, 'y_image_latest.jpg')
                 shutil.copyfile(out_file, latest_file)
 
             # save ckpt

@@ -5,7 +5,7 @@ import torch.nn as nn
 import scipy.linalg
 import torch.nn.functional as F
 
-from .modules import Actnorm
+from .modules import ActNorm
 from .coupling import AffineCoupling
 
 
@@ -44,17 +44,22 @@ class InvertibleConv1x1(nn.Module):
         B = z.size(0)
         C = z.size(1)
         z = torch.matmul(W, z.view(B, C, -1)).view(z.size())
-        log_det_jacobians += torch.sum(self.log_s, dim=0)
+
+        num_pixels = np.prod(z.size()) // (z.size(0) * z.size(1))
+        log_det_jacobians += torch.sum(self.log_s, dim=0) * num_pixels
 
         return z, log_det_jacobians
 
     def backward(self, y, log_det_jacobians):
-        with torch.no_grad():
-            LU = self.L * self.L_mask + self.U * self.U_mask + torch.diag(
-                self.sign_s * torch.exp(self.log_s))
-            y = torch.lu_solve(y.unsqueeze(-1), LU.unsqueeze(0),
-                               self.pivots.unsqueeze(0)).squeeze(-1)
-            log_det_jacobians -= torch.sum(self.log_s, dim=0)
+        LU = self.L * self.L_mask + self.U * self.U_mask + torch.diag(
+            self.sign_s * torch.exp(self.log_s))
+
+        y_reshape = y.view(y.size(0), y.size(1), -1)
+        y_reshape = torch.lu_solve(y_reshape, LU.unsqueeze(0), self.pivots.unsqueeze(0))
+        y = y_reshape.view(y.size())
+
+        num_pixels = np.prod(y.size()) // (y.size(0) * y.size(1))
+        log_det_jacobians -= torch.sum(self.log_s, dim=0) * num_pixels
 
         return y, log_det_jacobians
 
@@ -70,7 +75,7 @@ class Glow(nn.Module):
         linears = []
         couplings = []
         for i in range(self.n_layers):
-            actnorms.append(Actnorm(dims))
+            actnorms.append(ActNorm(dims))
             linears.append(InvertibleConv1x1(dims[0]))
             couplings.append(AffineCoupling(dims, odd=i % 2 != 0))
 

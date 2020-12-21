@@ -26,7 +26,7 @@ class AbstractCoupling(nn.Module):
 
     def backward(self, y, log_det_jacob):
         y0, y1 = self.squeeze.split(y)
-        y0, y1, log_det_jacob = self._transform(y0, y1, log_det_jacob)
+        y0, y1, log_det_jacob = self._inverse_transform(y0, y1, log_det_jacob)
         y = self.squeeze.merge(y0, y1)
 
         return y, log_det_jacob

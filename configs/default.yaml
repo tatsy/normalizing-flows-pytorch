@@ -16,6 +16,8 @@ optimizer:
   weight_decay: 1.0e-5
 
 run:
+  gpu: 0
+  debug: False
   distrib: circles
   ckpt_path: null
   output: outputs

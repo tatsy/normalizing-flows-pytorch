@@ -2,5 +2,7 @@
 name: ffjord
 t0: 0
 t1: 10
+layers: 4
 stepsize: 1
-trace: hutchinson
+solver: midpoint
+trace: approx

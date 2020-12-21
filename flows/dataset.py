@@ -1,3 +1,6 @@
+import os
+
+import hydra
 import numpy as np
 import torch
 import sklearn
@@ -7,7 +10,7 @@ N_DATASET_SIZE = 65536
 
 
 def _sample_circles(n):
-    samples, _ = sklearn.datasets.make_circles(N_DATASET_SIZE, noise=0.08)
+    samples, _ = sklearn.datasets.make_circles(N_DATASET_SIZE, noise=0.08, factor=0.5)
     return samples * 0.6
 
 
@@ -54,12 +57,15 @@ class FlowDataset(torch.utils.data.Dataset):
         self._initialize()
 
     def _initialize(self):
+        data_root = os.path.join(hydra.utils.get_original_cwd(), 'data')
         if self.name == 'mnist':
-            self.dset = torchvision.datasets.MNIST(root='./data/mnist', train=True, download=True)
+            self.dset = torchvision.datasets.MNIST(root=os.path.join(data_root, 'mnist'),
+                                                   train=True,
+                                                   download=True)
             self.dims = (1, 28, 28)
             self.dtype = 'image'
         elif self.name == 'cifar10':
-            self.dset = torchvision.datasets.CIFAR10(root='./data/cifar10',
+            self.dset = torchvision.datasets.CIFAR10(root=os.path.join(data_root, 'cifar10'),
                                                      train=True,
                                                      download=True)
             self.dims = (3, 32, 32)
@@ -99,6 +105,7 @@ class FlowDataset(torch.utils.data.Dataset):
         if self.dtype == 'image':
             data = self.dset[idx]
             data = np.asarray(data[0], dtype='float32') / 255.0
+            data = data * 2.0 - 1.0
             data = np.reshape(data, (self.dims[1], self.dims[2], -1))
             data = np.transpose(data, axes=(2, 0, 1))
         else:

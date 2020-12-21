@@ -1,8 +1,14 @@
+import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn.utils import weight_norm as WeightNorm
 
-from .spectral_norm import SpectralNorm
+# NOTE:
+# spectral normalization below is that used in iResNet,
+# which is different from the original one [Miyato et al. 2018]
+# (in Pytorch, it is provided by nn.utils.spectral_norm)
+# where it normalize the spectral norm when it is larger than
+# the value specfied by "coeff" (0.97 by default).
+from .spectral_norm import SpectralNorm as spectral_norm
 
 
 def deriv_sigmoid(x):
@@ -42,6 +48,20 @@ def deriv_mix_log_cdf(x, pi, mu, s):
     x = pi * deriv_sigmoid((x - mu) * w) * w
     x = torch.sum(x, dim=1)
     return x
+
+
+def weight_norm_wrapper(module, wrap=True):
+    if wrap:
+        return nn.utils.weight_norm(module)
+    else:
+        return module
+
+
+def spectral_norm_wrapper(module, wrap=True):
+    if wrap:
+        return spectral_norm(module)
+    else:
+        return module
 
 
 class Sigmoid(nn.Module):
@@ -133,74 +153,75 @@ class MixLogCDF(nn.Module):
 
 
 class ResBlock1d(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, weight_norm=True):
         super(ResBlock1d, self).__init__()
 
         self.net = nn.Sequential(
-            nn.BatchNorm1d(in_channels),
-            nn.ReLU(inplace=True),
-            WeightNorm(nn.Linear(in_channels, out_channels)),
+            weight_norm_wrapper(nn.Linear(in_channels, out_channels), weight_norm),
             nn.BatchNorm1d(out_channels),
             nn.ReLU(inplace=True),
-            WeightNorm(nn.Linear(out_channels, out_channels)),
+            weight_norm_wrapper(nn.Linear(out_channels, out_channels), weight_norm),
+        )
+        self.out = nn.Sequential(
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(inplace=True),
         )
 
         if in_channels != out_channels:
-            self.bridge = WeightNorm(nn.Linear(in_channels, out_channels))
+            self.bridge = weight_norm_wrapper(nn.Linear(in_channels, out_channels), weight_norm)
         else:
             self.bridge = nn.Sequential()
 
     def forward(self, x):
         y = self.net(x)
         x = self.bridge(x)
-        return x + y
+        return self.out(x + y)
 
 
 class ResBlock2d(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, weight_norm):
         super(ResBlock2d, self).__init__()
 
         self.net = nn.Sequential(
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(inplace=True),
-            WeightNorm(nn.Conv2d(in_channels, out_channels, 3, 1, 1)),
+            weight_norm_wrapper(nn.Conv2d(in_channels, out_channels, 3, 1, 1), weight_norm),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            WeightNorm(nn.Conv2d(out_channels, out_channels, 3, 1, 1)),
+            weight_norm_wrapper(nn.Conv2d(in_channels, out_channels, 3, 1, 1), weight_norm),
+        )
+        self.out = nn.Sequential(
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
         )
 
         if in_channels != out_channels:
-            self.bridge = WeightNorm(nn.Conv2d(in_channels, out_channels, 3, 1, 1))
+            self.bridge = weight_norm_wrapper(nn.Conv2d(in_channels, out_channels, 3, 1, 1),
+                                              weight_norm)
         else:
             self.bridge = nn.Sequential()
 
     def forward(self, x):
         y = self.net(x)
         x = self.bridge(x)
-        return x + y
+        return self.out(x + y)
 
 
 class MLP(nn.Module):
-    def __init__(self, in_channels, out_channels, base_filters=32):
+    def __init__(self, in_channels, out_channels, base_filters=32, n_blocks=2, weight_norm=True):
         super(MLP, self).__init__()
 
         self.in_block = nn.Sequential(
-            WeightNorm(nn.Linear(in_channels, base_filters)),
+            weight_norm_wrapper(nn.Linear(in_channels, base_filters), weight_norm),
             nn.BatchNorm1d(base_filters),
             nn.ReLU(inplace=True),
-            WeightNorm(nn.Linear(base_filters, base_filters)),
         )
 
-        self.mid_block = nn.Sequential(
-            ResBlock1d(base_filters, base_filters),
-            ResBlock1d(base_filters, base_filters),
-        )
+        res_blocks = []
+        for i in range(n_blocks):
+            res_blocks.append(ResBlock1d(base_filters, base_filters, weight_norm))
 
-        self.out_block = nn.Sequential(
-            nn.BatchNorm1d(base_filters),
-            nn.ReLU(inplace=True),
-            WeightNorm(nn.Linear(base_filters, out_channels)),
-        )
+        self.mid_block = nn.Sequential(*res_blocks)
+
+        self.out_block = weight_norm_wrapper(nn.Linear(base_filters, out_channels), weight_norm)
 
     def forward(self, x):
         x = self.in_block(x)
@@ -209,26 +230,23 @@ class MLP(nn.Module):
 
 
 class ConvNet(nn.Module):
-    def __init__(self, in_channels, out_channels, base_filters=32):
+    def __init__(self, in_channels, out_channels, base_filters=32, n_blocks=2, weight_norm=True):
         super(ConvNet, self).__init__()
 
         self.in_block = nn.Sequential(
-            WeightNorm(nn.Conv2d(in_channels, base_filters, 3, 1, 1)),
+            weight_norm_wrapper(nn.Conv2d(in_channels, base_filters, 3, 1, 1), weight_norm),
             nn.BatchNorm2d(base_filters),
             nn.ReLU(inplace=True),
-            WeightNorm(nn.Conv2d(base_filters, base_filters, 3, 1, 1)),
         )
 
-        self.mid_block = nn.Sequential(
-            ResBlock2d(base_filters, base_filters),
-            ResBlock2d(base_filters, base_filters),
-        )
+        res_blocks = []
+        for i in range(n_blocks):
+            res_blocks.append(ResBlock2d(base_filters, base_filters, weight_norm))
 
-        self.out_block = nn.Sequential(
-            nn.BatchNorm2d(base_filters),
-            nn.ReLU(inplace=True),
-            WeightNorm(nn.Conv2d(base_filters, out_channels, 3, 1, 1)),
-        )
+        self.mid_block = nn.Sequential(*res_blocks)
+
+        self.out_block = weight_norm_wrapper(nn.Conv2d(base_filters, out_channels, 3, 1, 1),
+                                             weight_norm)
 
     def forward(self, x):
         x = self.in_block(x)
@@ -236,27 +254,37 @@ class ConvNet(nn.Module):
         return self.out_block(x)
 
 
-class Actnorm(nn.Module):
-    def __init__(self, n_channels):
-        super(Actnorm, self).__init__()
-        self.n_channels = n_channels
-        self.log_scale = nn.Parameter(torch.zeros(n_channels), requires_grad=True)
-        self.bias = nn.Parameter(torch.zeros(n_channels), requires_grad=True)
+class ActNorm(nn.Module):
+    def __init__(self, num_features, eps=1.0e-5):
+        super(ActNorm, self).__init__()
+        self.num_features = num_features
+        self.eps = eps
+
+        self.dimensions = [1] + [1 for _ in num_features]
+        self.dimensions[1] = num_features[0]
+        self.log_scale = nn.Parameter(torch.zeros(self.dimensions), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(self.dimensions), requires_grad=True)
         self.initialized = False
 
     def forward(self, z, log_det_jacobians):
         if not self.initialized:
-            self.log_scale.data.copy_(-torch.log(z.std(0) + 1.0e-12))
-            self.bias.data.copy_(-z.mean(0))
+            z_reshape = z.view(z.size(0), self.num_features[0], -1)
+            log_std = torch.log(torch.std(z_reshape, dim=[0, 2]) + self.eps)
+            mean = torch.mean(z_reshape, dim=[0, 2])
+            self.log_scale.data.copy_(log_std.view(self.dimensions))
+            self.bias.data.copy_(mean.view(self.dimensions))
             self.initialized = True
 
-        z = torch.exp(self.log_scale) * z + self.bias
-        log_det_jacobians += torch.sum(self.log_scale.view(1, -1), dim=1)
+        z = (z - self.bias) / torch.exp(self.log_scale)
+
+        num_pixels = np.prod(z.size()) // (z.size(0) * z.size(1))
+        log_det_jacobians -= torch.sum(self.log_scale) * num_pixels
         return z, log_det_jacobians
 
     def backward(self, y, log_det_jacobians):
-        y = (y - self.bias) * torch.exp(-self.log_scale)
-        log_det_jacobians -= torch.sum(self.log_scale.view(1, -1), dim=1)
+        y = y * torch.exp(self.log_scale) + self.bias
+        num_pixels = np.prod(y.size()) // (y.size(0) * y.size(1))
+        log_det_jacobians += torch.sum(self.log_scale) * num_pixels
         return y, log_det_jacobians
 
 
@@ -264,8 +292,8 @@ class BatchNorm(nn.Module):
     def __init__(self, num_features, momentum=0.1, eps=1.0e-5):
         super(BatchNorm, self).__init__()
 
-        self.log_gamma = nn.Parameter(torch.zeros(num_features))
-        self.beta = nn.Parameter(torch.zeros(num_features))
+        self.log_gamma = nn.Parameter(torch.zeros(num_features), requires_grad=True)
+        self.beta = nn.Parameter(torch.zeros(num_features), requires_grad=True)
         self.momentum = momentum
         self.eps = eps
 

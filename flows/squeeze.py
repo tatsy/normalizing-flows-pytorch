@@ -2,15 +2,21 @@ import torch
 import torch.nn as nn
 
 
-class Squeeze1d(object):
+class Squeeze1d(nn.Module):
     def __init__(self, dims, odd=False):
+        super(Squeeze1d, self).__init__()
+
         assert len(dims) == 1, 'Squeeze1 can be applied to 1D tensor!'
         self.dims = dims
         self.modulo = 0 if not odd else 1
 
         d = dims[0]
         idx = torch.arange(d, dtype=torch.long)
-        self.mask = torch.where(idx % 2 == self.modulo, torch.ones(d), torch.zeros(d)).long()
+        mask = torch.where(idx % 2 == self.modulo, torch.ones(d), torch.zeros(d)).long()
+        self.register_buffer('mask', mask)
+
+    def forward(self, x):
+        raise NotImplementedError()
 
     def split(self, z):
         z0 = z[:, self.mask != 0]
@@ -26,14 +32,20 @@ class Squeeze1d(object):
         return z
 
 
-class Squeeze2d(object):
+class Squeeze2d(nn.Module):
     def __init__(self, dims, odd=False):
+        super(Squeeze2d, self).__init__()
+
         assert len(dims) == 3, 'Squeeze1 can be applied to 3D tensor!'
         modulo = 0 if not odd else 1
         _, h, w = dims
         self.dims = dims
         idx = torch.arange(4, dtype=torch.long)
-        self.mask = torch.where(idx % 2 == modulo, torch.ones(4), torch.zeros(4)).long()
+        mask = torch.where(idx % 2 == modulo, torch.ones(4), torch.zeros(4)).long()
+        self.register_buffer('mask', mask)
+
+    def forward(self, x):
+        raise NotImplementedError()
 
     def split(self, z):
         z_patches = z.unfold(2, 2, 2).unfold(3, 2, 2).contiguous()

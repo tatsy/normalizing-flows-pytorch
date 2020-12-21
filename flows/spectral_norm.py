@@ -41,9 +41,11 @@ class SpectralNorm(nn.Module):
         scale = self.coeff / sigma.item()
 
         if scale < 1.0:
-            setattr(self.module, self.name, Parameter(w.data * scale))
+            # setattr(self.module, self.name, Parameter(w.data * scale, requires_grad=False))
+            self.module.register_buffer(self.name, w.data * scale)
         else:
-            setattr(self.module, self.name, w)
+            # setattr(self.module, self.name, w)
+            self.module.register_buffer(self.name, w.data)
 
     def _made_params(self):
         try:
@@ -60,17 +62,17 @@ class SpectralNorm(nn.Module):
         height = w.data.shape[0]
         width = w.view(height, -1).data.shape[1]
 
-        u = Parameter(w.data.new(height).normal_(0, 1), requires_grad=False)
-        v = Parameter(w.data.new(width).normal_(0, 1), requires_grad=False)
+        u = w.data.new(height).normal_(0, 1)
+        v = w.data.new(width).normal_(0, 1)
         u.data = l2normalize(u.data)
         v.data = l2normalize(v.data)
-        w_bar = Parameter(w.data)
+        w_bar = w.data
 
         del self.module._parameters[self.name]
 
-        self.module.register_parameter(self.name + '_u', u)
-        self.module.register_parameter(self.name + '_v', v)
-        self.module.register_parameter(self.name + '_bar', w_bar)
+        self.module.register_buffer(self.name + '_u', u)
+        self.module.register_buffer(self.name + '_v', v)
+        self.module.register_buffer(self.name + '_bar', w_bar)
 
     def forward(self, *args):
         self._update_u_v()

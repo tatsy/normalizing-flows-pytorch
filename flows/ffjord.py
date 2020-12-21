@@ -1,60 +1,12 @@
+from functools import partial
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.autograd
 
+from .cnf import CNF
 from .jacobian import trace_df_dz
-
-
-class HyperNetwork(nn.Module):
-    """ neural net for hyper parameters """
-    def __init__(self, in_out_channels, base_filters=32, width=64):
-        super(HyperNetwork, self).__init__()
-        self.in_out_channels = in_out_channels
-        self.width = width
-
-        self.net = nn.Sequential(
-            nn.Linear(1, base_filters),
-            nn.Tanh(),
-            nn.Linear(base_filters, base_filters),
-            nn.Tanh(),
-        )
-
-        blocksize = width * in_out_channels
-        self.out_W = nn.Linear(base_filters, blocksize)
-        self.out_U = nn.Linear(base_filters, blocksize)
-        self.out_G = nn.Linear(base_filters, blocksize)
-        self.out_B = nn.Linear(base_filters, width)
-
-    def forward(self, t):
-        h = self.net(t)
-        W = self.out_W(h).view(self.width, self.in_out_channels, 1)
-        U = self.out_U(h).view(self.width, 1, self.in_out_channels)
-        G = self.out_G(h).view(self.width, 1, self.in_out_channels)
-        B = self.out_B(h).view(self.width, 1, 1)
-        U = U * torch.sigmoid(G)
-        return W, B, U
-
-
-class CNF(nn.Module):
-    """ continuous normalizing flow """
-    def __init__(self, in_out_channels, base_filters=32, width=32):
-        super(CNF, self).__init__()
-        self.width = width
-        self.hyp_net = HyperNetwork(in_out_channels, base_filters, width)
-
-    def forward(self, z, t):
-        t = t.view(1, 1)
-
-        with torch.set_grad_enabled(True):
-            z.requires_grad_(True)
-            W, B, U = self.hyp_net(t)
-            Z = z.unsqueeze(0).repeat(self.width, 1, 1)
-            h = torch.tanh(torch.matmul(Z, W) + B)
-            dz_dt = torch.matmul(h, U).mean(0)
-            dlogpz_dt = -trace_df_dz(dz_dt, z, method='exact')
-
-        return dz_dt, dlogpz_dt
 
 
 class Midpoint(object):
@@ -81,17 +33,26 @@ class RK4(object):
         return dk * dt, dl * dt
 
 
+SOLVERS = {
+    'midpoint': Midpoint,
+    'rk4': RK4,
+}
+
+
 class Ffjord(nn.Module):
-    def __init__(self, n_dims, t0=0, t1=2, stepsize=1, *args, **kwargs):
+    def __init__(self, dims, cfg):
         super(Ffjord, self).__init__()
 
-        self.n_dims = n_dims
-        self.func = CNF(n_dims)
+        self.dims = dims
+        self.func = CNF(dims, n_layers=cfg.network.layers, trace_estimate_method=cfg.network.trace)
+        self.t0 = cfg.network.t0
+        self.t1 = cfg.network.t1
+        self.stepsize = cfg.network.stepsize
 
-        steps = int(np.ceil((t1 - t0) / stepsize)) + 1
-        times = torch.linspace(t0, t1, steps, dtype=torch.float32)
-        self.times = nn.Parameter(times, requires_grad=False)
-        self.solver = RK4()
+        steps = int(np.ceil((self.t1 - self.t0) / self.stepsize)) + 1
+        times = torch.linspace(self.t0, self.t1, steps, dtype=torch.float32)
+        self.register_buffer('times', times)
+        self.solver = SOLVERS[cfg.network.solver]()
 
     def forward(self, z1):
         z = z1
