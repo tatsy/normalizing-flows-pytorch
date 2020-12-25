@@ -1,2 +1,4 @@
 # @package network
 name: resflow
+logdet: unbias
+

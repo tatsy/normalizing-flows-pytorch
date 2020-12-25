@@ -1,4 +1,5 @@
 import os
+import time
 
 import hydra
 import numpy as np
@@ -49,11 +50,16 @@ def _sample_s_curve(n):
     return samples
 
 
-class FlowDataset(torch.utils.data.Dataset):
-    def __init__(self, name='moons'):
-        super(FlowDataset, self).__init__()
+class FlowDataLoader(object):
+    def __init__(self, name='moons', batch_size=1024, total_steps=100000, shuffle=True):
+        super(FlowDataLoader, self).__init__()
         self.name = name
+        self.batch_size = batch_size
+        self.total_steps = total_steps
+        self.shuffle = shuffle
+
         self.iter = 0
+        self.indices = None
         self._initialize()
 
     def _initialize(self):
@@ -74,45 +80,47 @@ class FlowDataset(torch.utils.data.Dataset):
             self.dset = _sample_circles(N_DATASET_SIZE)
             self.dims = (2, )
             self.dtype = '2d'
-            self.iter = N_DATASET_SIZE
         elif self.name == 'moons':
             self.dset = _sample_moons(N_DATASET_SIZE)
             self.dims = (2, )
             self.dtype = '2d'
-            self.iter = N_DATASET_SIZE
         elif self.name == 'normals':
             self.dset = _sample_normals(N_DATASET_SIZE)
             self.dims = (2, )
             self.dtype = '2d'
-            self.iter = N_DATASET_SIZE
         elif self.name == 'swiss':
             self.dset = _sample_swiss(N_DATASET_SIZE)
             self.dims = (3, )
             self.dtype = '3d'
-            self.iter = N_DATASET_SIZE
         elif self.name == 's_curve':
             self.dset = _sample_s_curve(N_DATASET_SIZE)
             self.dims = (3, )
             self.dtype = '3d'
-            self.iter = N_DATASET_SIZE
         else:
             raise Exception('unsupported type: "%s"' % self.name)
+
+        self.iter = 0
+        self.indices = np.arange(len(self.dset))
+        if self.shuffle:
+            np.random.shuffle(self.indices)
 
     def __len__(self):
         return len(self.dset)
 
-    def __getitem__(self, idx):
-        if self.dtype == 'image':
-            data = self.dset[idx]
-            data = np.asarray(data[0], dtype='float32') / 255.0
-            data = data * 2.0 - 1.0
-            data = np.reshape(data, (self.dims[1], self.dims[2], -1))
-            data = np.transpose(data, axes=(2, 0, 1))
-        else:
-            self.iter -= 1
-            data = self.dset[self.iter]
-            data = data.astype('float32')
-            if self.iter == 0:
+    def __iter__(self):
+        for _ in range(self.total_steps):
+            if self.__len__() <= self.iter + self.batch_size:
                 self._initialize()
 
-        return data
+            idx = self.indices[self.iter:self.iter + self.batch_size]
+            self.iter += self.batch_size
+
+            if self.dtype == 'image':
+                data = [np.asarray(self.dset[i][0], dtype='float32') / 255.0 for i in idx]
+                data = np.reshape(data, (self.batch_size, self.dims[1], self.dims[2], -1))
+                data = np.transpose(data, axes=(0, 3, 1, 2))
+            else:
+                data = self.dset[idx]
+                data = data.astype('float32')
+
+            yield torch.from_numpy(data)

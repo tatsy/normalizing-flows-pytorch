@@ -3,12 +3,16 @@ import torch
 import torch.nn as nn
 
 # NOTE:
+# weight normalization in Pytorch (i.e., torch.nn.utils.weight_norm)
+# does not support using "eps" to disable zero-division.
+from .weight_norm import WeightNorm
+# NOTE:
 # spectral normalization below is that used in iResNet,
 # which is different from the original one [Miyato et al. 2018]
 # (in Pytorch, it is provided by nn.utils.spectral_norm)
 # where it normalize the spectral norm when it is larger than
 # the value specfied by "coeff" (0.97 by default).
-from .spectral_norm import SpectralNorm as spectral_norm
+from .spectral_norm import SpectralNorm
 
 
 def deriv_sigmoid(x):
@@ -52,16 +56,27 @@ def deriv_mix_log_cdf(x, pi, mu, s):
 
 def weight_norm_wrapper(module, wrap=True):
     if wrap:
-        return nn.utils.weight_norm(module)
+        return WeightNorm(module)
     else:
         return module
 
 
 def spectral_norm_wrapper(module, wrap=True):
     if wrap:
-        return spectral_norm(module)
+        return SpectralNorm(module)
     else:
         return module
+
+
+class Identity(nn.Module):
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def forward(self, x, log_det_jacobians):
+        return x, log_det_jacobians
+
+    def backward(self, x, log_det_jacobians):
+        return x, log_det_jacobians
 
 
 class Sigmoid(nn.Module):
@@ -81,11 +96,12 @@ class Sigmoid(nn.Module):
 
 
 class Logit(nn.Module):
-    def __init__(self):
+    def __init__(self, eps=1.0e-5):
         super(Logit, self).__init__()
+        self.eps = eps
 
     def forward(self, x, log_det_jacobians):
-        x = torch.clamp(x, 1.0e-8, 1.0 - 1.0e-8)
+        x = torch.clamp(x, self.eps, 1.0 - self.eps)
         log_det = torch.log(deriv_logit(x))
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
         return torch.logit(x), log_det_jacobians + log_det
@@ -150,6 +166,16 @@ class MixLogCDF(nn.Module):
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
 
         return x, log_det_jacobians - log_det
+
+
+class LipSwish(nn.Module):
+    def __init__(self):
+        super(LipSwish, self).__init__()
+        beta = nn.Parameter(torch.ones([1], dtype=torch.float32))
+        self.register_parameter('beta', beta)
+
+    def forward(self, x):
+        return x * torch.sigmoid(self.beta * x) / 1.1
 
 
 class ResBlock1d(nn.Module):
@@ -292,26 +318,28 @@ class BatchNorm(nn.Module):
     def __init__(self, num_features, momentum=0.1, eps=1.0e-5):
         super(BatchNorm, self).__init__()
 
-        self.log_gamma = nn.Parameter(torch.zeros(num_features), requires_grad=True)
-        self.beta = nn.Parameter(torch.zeros(num_features), requires_grad=True)
-        self.momentum = momentum
         self.eps = eps
+        self.momentum = momentum
+
+        log_gamma = nn.Parameter(torch.zeros(num_features))
+        beta = nn.Parameter(torch.zeros(num_features))
+        self.register_parameter('log_gamma', log_gamma)
+        self.register_parameter('beta', beta)
 
         self.register_buffer('running_mean', torch.zeros(num_features))
         self.register_buffer('running_var', torch.ones(num_features))
-
-        self.batch_mean = None
-        self.batch_var = None
+        self.register_buffer('batch_mean', torch.zeros(num_features))
+        self.register_buffer('batch_var', torch.ones(num_features))
 
     def forward(self, x, log_det_jacob):
         if self.training:
-            self.batch_mean = x.mean(0)
-            self.batch_var = (x - self.batch_mean).pow(2).mean(0) + self.eps
+            self.batch_mean.data_ = x.mean(0)
+            self.batch_var.data_ = (x - self.batch_mean).pow(2).mean(0) + self.eps
 
-            self.running_mean.mul_(self.momentum)
-            self.running_var.mul_(self.momentum)
-            self.running_mean.add_(self.batch_mean.detach() * (1.0 - self.momentum))
-            self.running_var.add_(self.batch_var.detach() * (1.0 - self.momentum))
+            self.running_mean.mul_(1.0 - self.momentum)
+            self.running_var.mul_(1.0 - self.momentum)
+            self.running_mean.add_(self.batch_mean.detach() * self.momentum)
+            self.running_var.add_(self.batch_var.detach() * self.momentum)
 
             mean, var = self.batch_mean, self.batch_var
         else:

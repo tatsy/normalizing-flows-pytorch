@@ -5,7 +5,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .odeint import odeint_adjoint as odeint
+# from .odeint import odeint
 from .jacobian import trace_df_dz
+
+
+def weights_init(m):
+    """
+    initialize weights as HyperXXXX layers work as identity by default
+    """
+    classname = m.__class__.__name__
+    if classname.find('Linear') != -1 or classname.find('Conv') != -1:
+        nn.init.constant_(m.weight, 0.0)
+        nn.init.normal_(m.bias, 0, 0.01)
 
 
 class HyperNetwork(nn.Module):
@@ -33,8 +45,10 @@ class HyperLinear(nn.Module):
 
         self.weight_shape = [out_features, in_features]
         self.bias_shape = [out_features]
+
         self.n_out_params = np.prod(self.weight_shape) + np.prod(self.bias_shape)
         self.hyper_net = HyperNetwork(1, self.n_out_params)
+        self.hyper_net.apply(weights_init)
 
     def forward(self, x, t):
         params = self.hyper_net(t)
@@ -63,6 +77,7 @@ class HyperConv2d(nn.Module):
         self.bias_shape = [out_channels]
         self.n_out_params = np.prod(self.weight_shape) + np.prod(self.bias_shape)
         self.hyper_net = HyperNetwork(1, self.n_out_params)
+        self.hyper_net.apply(weights_init)
 
     def forward(self, x, t):
         params = self.hyper_net(t)
@@ -76,39 +91,65 @@ class HyperConv2d(nn.Module):
                         groups=self.groups)
 
 
-class CNF(nn.Module):
+class ODENet(nn.Module):
     """ continuous normalizing flow """
     def __init__(self, dims, base_filters=8, n_layers=4, trace_estimate_method='exact'):
-        super(CNF, self).__init__()
+        super(ODENet, self).__init__()
         self.trace_estimator_fn = partial(trace_df_dz, method=trace_estimate_method)
 
         if len(dims) == 1:
             # density
-            conv_fn = partial(HyperLinear, base_filters=base_filters)
+            conv_fn = HyperLinear
         elif len(dims) == 3:
             # image
-            conv_fn = partial(HyperConv2d, base_filters=base_filters)
+            conv_fn = HyperConv2d
         else:
             raise Exception('unsupported target dimension: %s' % (str(dims)))
 
         hidden_dims = [dims[0]] + [base_filters] * n_layers + [dims[0]]
         layers = []
         for in_dims, out_dims in zip(hidden_dims[:-1], hidden_dims[1:]):
-            layers.append(conv_fn(in_dims, out_dims))
+            layers.append(conv_fn(in_dims, out_dims, base_filters=base_filters))
 
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, z, t):
+    def forward(self, t, states):
         t = t.view(1, 1)
-
+        z = states[0]
         with torch.enable_grad():
             z.requires_grad_(True)
-            for i, layer in enumerate(self.layers):
-                z = layer(z, t)
-                if i != len(self.layers) - 1:
-                    z = torch.relu(z)
+            t.requires_grad_(True)
 
             dz_dt = z
-            dlogpz_dt = -self.trace_estimator_fn(dz_dt, z)
+            for i, layer in enumerate(self.layers):
+                dz_dt = layer(dz_dt, t)
+                if i != len(self.layers) - 1:
+                    dz_dt = F.softplus(dz_dt)
+
+            dlogpz_dt = self.trace_estimator_fn(dz_dt, z)
 
         return dz_dt, dlogpz_dt
+
+
+class CNF(nn.Module):
+    def __init__(self, dims, times, solver_type, trace_estimate_method):
+        super(CNF, self).__init__()
+
+        self.dims = dims
+        self.func = ODENet(dims, trace_estimate_method=trace_estimate_method)
+        self.method = solver_type
+        self.register_buffer('times', times)
+
+    def forward(self, z, log_df_dz):
+        times = reversed(self.times)
+        states = odeint(self.func, (z, log_df_dz), times, self.method)
+        z = states[0]
+        log_df_dz = states[1]
+        return z, log_df_dz
+
+    def backward(self, z, log_df_dz):
+        times = self.times
+        states = odeint(self.func, (z, log_df_dz), times, self.method)
+        z = states[0]
+        log_df_dz = states[1]
+        return z, log_df_dz

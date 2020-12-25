@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.autograd
 
+from .misc import safe_detach
+
 
 def trace_df_dz(f, z, method='exact'):
     if method == 'exact':
@@ -20,6 +22,7 @@ def _trace_df_dz_exact(f, z):
     """
     n_dims = z.size(1)
     diags = [torch.autograd.grad(f[:, i].sum(), z, create_graph=True)[0] for i in range(n_dims)]
+
     diags = [diag[:, i] for i, diag in enumerate(diags)]
     diags = torch.stack(diags, dim=1)
     return torch.sum(diags, dim=1)
@@ -198,15 +201,6 @@ def basic_logdet_wrapper(logdet_fn, x, g_fn, training):
 def memory_saved_logdet_wrapper(logdet_fn, x, g_fn, training):
     g_params = list(g_fn.parameters())
     return MemorySavedLogDetEstimator.apply(logdet_fn, x, g_fn, training, *g_params)
-
-
-def safe_detach(x):
-    """
-    detech operation which keeps reguires_grad
-    ---
-    https://github.com/rtqichen/residual-flows/blob/master/lib/layers/iresblock.py
-    """
-    return x.detach().requires_grad_(x.requires_grad)
 
 
 if __name__ == '__main__':

@@ -6,72 +6,52 @@ import torch.nn as nn
 import torch.autograd
 
 from .cnf import CNF
-from .jacobian import trace_df_dz
-
-
-class Midpoint(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, x, t, func, dt):
-        k1, l1 = func(x, t)
-        k2, l2 = func(x + 0.5 * k1 * dt, t + 0.5 * dt)
-        return k2 * dt, l2 * dt
-
-
-class RK4(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, x, t, func, dt):
-        k1, l1 = func(x, t)
-        k2, l2 = func(x + 0.5 * k1 * dt, t + 0.5 * dt)
-        k3, l3 = func(x + 0.5 * k2 * dt, t + 0.5 * dt)
-        k4, l4 = func(x + k3 * dt, t + dt)
-        dk = (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
-        dl = (l1 + 2.0 * l2 + 2.0 * l3 + l4) / 6.0
-        return dk * dt, dl * dt
-
-
-SOLVERS = {
-    'midpoint': Midpoint,
-    'rk4': RK4,
-}
+from .modules import Identity, BatchNorm
 
 
 class Ffjord(nn.Module):
-    def __init__(self, dims, cfg):
+    def __init__(self, dims, in_act_fn=None, cfg=None):
         super(Ffjord, self).__init__()
 
         self.dims = dims
-        self.func = CNF(dims, n_layers=cfg.network.layers, trace_estimate_method=cfg.network.trace)
-        self.t0 = cfg.network.t0
-        self.t1 = cfg.network.t1
+        self.n_layers = cfg.network.layers
         self.stepsize = cfg.network.stepsize
 
-        steps = int(np.ceil((self.t1 - self.t0) / self.stepsize)) + 1
-        times = torch.linspace(self.t0, self.t1, steps, dtype=torch.float32)
-        self.register_buffer('times', times)
-        self.solver = SOLVERS[cfg.network.solver]()
+        t0 = cfg.network.t0
+        t1 = cfg.network.t1
+        steps = int(np.ceil((t1 - t0) / self.stepsize)) + 1
+        times = torch.linspace(t0, t1, steps, dtype=torch.float32)
+
+        layers = []
+        bnorms = []
+        for i in range(self.n_layers):
+            layers.append(
+                CNF(dims,
+                    times=times,
+                    solver_type=cfg.network.solver,
+                    trace_estimate_method=cfg.network.trace))
+            bnorms.append(BatchNorm(dims))
+
+        self.in_act_fn = in_act_fn() if in_act_fn is not None else Identity()
+        self.layers = nn.ModuleList(layers)
+        self.bnorms = nn.ModuleList(bnorms)
 
     def forward(self, z1):
         z = z1
-        log_det_jacobians = torch.zeros_like(z[:, 0])
-        for t0, t1 in zip(reversed(self.times[:-1]), reversed(self.times[1:])):
-            dt = t1 - t0
-            dz, dlogpz = self.solver(z, t1, self.func, -dt)
-            z = z + dz
-            log_det_jacobians = log_det_jacobians - dlogpz
+        log_df_dz = torch.zeros(z.size(0)).type_as(z).to(z.device)
+        z, log_df_dz = self.in_act_fn(z, log_df_dz)
+        for i in range(self.n_layers):
+            z, log_df_dz = self.bnorms[i](z, log_df_dz)
+            z, log_df_dz = self.layers[i](z, log_df_dz)
 
-        return z, log_det_jacobians
+        return z, log_df_dz
 
     def backward(self, z0):
         z = z0
-        log_det_jacobians = torch.zeros_like(z[:, 0])
-        for t0, t1 in zip(self.times[:-1], self.times[1:]):
-            dt = t1 - t0
-            dz, dlogpz = self.solver(z, t0, self.func, dt)
-            z = z + dz
-            log_det_jacobians = log_det_jacobians - dlogpz
+        log_df_dz = torch.zeros(z.size(0)).type_as(z).to(z.device)
+        for i in reversed(range(self.n_layers)):
+            z, log_df_dz = self.layers[i].backward(z, log_df_dz)
+            z, log_df_dz = self.bnorms[i].backward(z, log_df_dz)
+        z, log_df_dz = self.in_act_fn.backward(z, log_df_dz)
 
-        return z, log_det_jacobians
+        return z, log_df_dz

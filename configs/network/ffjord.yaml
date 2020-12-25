@@ -1,8 +1,8 @@
 # @package network
 name: ffjord
 t0: 0
-t1: 10
-layers: 4
+t1: 1
+layers: 8
 stepsize: 1
-solver: midpoint
+solver: rk4
 trace: approx

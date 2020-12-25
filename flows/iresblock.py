@@ -3,6 +3,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 
+from .modules import LipSwish
 from .jacobian import logdet_df_dz, basic_logdet_wrapper, memory_saved_logdet_wrapper
 from .spectral_norm import SpectralNorm as spectral_norm
 
@@ -10,6 +11,7 @@ activations = {
     'relu': nn.ReLU,
     'elu': nn.ELU,
     'softplus': nn.Softplus,
+    'lipswish': LipSwish,
 }
 
 
@@ -19,7 +21,7 @@ class InvertibleResBlock(nn.Module):
                  in_out_channels,
                  base_filters=32,
                  n_layers=2,
-                 activation='elu',
+                 activation='lipswish',
                  ftol=1.0e-4,
                  logdet_estimate_method='fixed'):
         super(InvertibleResBlock, self).__init__()

@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 import torch.autograd
 
-from .glow import ActNorm
+from .modules import ActNorm, Identity
 from .iresblock import InvertibleResBlock
 
 
 class ResFlow(nn.Module):
-    def __init__(self, dims, cfg):
+    def __init__(self, dims, in_act_fn=None, cfg=None):
         super(ResFlow, self).__init__()
 
         self.dims = dims
@@ -17,25 +17,26 @@ class ResFlow(nn.Module):
         layers = []
         for i in range(self.n_layers):
             actnorms.append(ActNorm(dims))
-            layers.append(InvertibleResBlock(dims[0]))
+            layers.append(InvertibleResBlock(dims[0], logdet_estimate_method=cfg.network.logdet))
 
+        self.in_act_fn = in_act_fn() if in_act_fn is not None else Identity()
         self.actnorms = nn.ModuleList(actnorms)
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, y):
-        z = y
-        log_det_jacobians = torch.zeros_like(y[:, 0])
+    def forward(self, z):
+        log_df_dz = torch.zeros(z.size(0)).type_as(z).to(z.device)
+        z, log_df_dz = self.in_act_fn(z, log_df_dz)
         for i in range(self.n_layers):
-            z, log_det_jacobians = self.actnorms[i](z, log_det_jacobians)
-            z, log_det_jacobians = self.layers[i](z, log_det_jacobians)
+            z, log_df_dz = self.actnorms[i](z, log_df_dz)
+            z, log_df_dz = self.layers[i](z, log_df_dz)
 
-        return z, log_det_jacobians
+        return z, log_df_dz
 
     def backward(self, z):
-        y = z
-        log_det_jacobians = torch.zeros_like(z[:, 0])
+        log_df_dz = torch.zeros(z.size(0)).type_as(z).to(z.device)
         for i in reversed(range(self.n_layers)):
-            y, log_det_jacobians = self.layers[i].backward(y, log_det_jacobians)
-            y, log_det_jacobians = self.actnorms[i].backward(y, log_det_jacobians)
+            z, log_df_dz = self.layers[i].backward(z, log_df_dz)
+            z, log_df_dz = self.actnorms[i].backward(z, log_df_dz)
+        z, log_df_dz = self.in_act_fn.backward(z, log_df_dz)
 
-        return y, log_det_jacobians
+        return z, log_df_dz

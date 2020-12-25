@@ -1,9 +1,5 @@
 import torch
-import torch.nn.functional as F
-from torch import Tensor, nn
-from torch.nn import Parameter
-from torch.autograd import Variable
-from torch.optim.optimizer import Optimizer, required
+import torch.nn as nn
 
 
 def l2normalize(v, eps=1e-12):
@@ -17,10 +13,11 @@ class SpectralNorm(nn.Module):
     most of this implementation is borrowed from the following link:
     https://github.com/christiancosgrove/pytorch-spectral-normalization-gan
     """
-    def __init__(self, module, coeff=0.97, name='weight', power_iterations=1):
+    def __init__(self, module, coeff=0.97, eps=1.0e-5, name='weight', power_iterations=1):
         super(SpectralNorm, self).__init__()
         self.module = module
         self.coeff = coeff
+        self.eps = eps
         self.name = name
         self.power_iterations = power_iterations
         if not self._made_params():
@@ -38,7 +35,7 @@ class SpectralNorm(nn.Module):
 
         # sigma = torch.dot(u.data, torch.mv(w.view(height,-1).data, v.data))
         sigma = u.dot(w.view(height, -1).mv(v))
-        scale = self.coeff / sigma.item()
+        scale = self.coeff / (sigma.item() + self.eps)
 
         if scale < 1.0:
             # setattr(self.module, self.name, Parameter(w.data * scale, requires_grad=False))

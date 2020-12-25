@@ -2,18 +2,20 @@ import os
 import time
 import shutil
 import argparse
-from itertools import cycle
 
 import hydra
 import numpy as np
 import torch
 import torchvision
 from omegaconf import OmegaConf, DictConfig
+from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.multivariate_normal import MultivariateNormal
 
 from flows import Glow, Ffjord, Flowxx, RealNVP, ResFlow
-from common.utils import save_plot, save_image, save_image_plot
-from flows.dataset import FlowDataset
+from flows.misc import anomaly_hook
+from common.utils import image_plot, save_image, scatter_plot
+from flows.dataset import FlowDataLoader
+from flows.modules import Logit, Identity
 from common.logging import Logging
 
 networks = {
@@ -40,14 +42,16 @@ class Model(object):
         else:
             self.device = torch.device('cpu')
 
+        self.name = cfg.network.name
         self.dims = dims
         self.dimension = np.prod(dims)
 
         mu = torch.zeros(self.dimension, dtype=torch.float32, device=self.device)
-        covar = 0.25 * torch.eye(self.dimension, dtype=torch.float32, device=self.device)
+        covar = torch.eye(self.dimension, dtype=torch.float32, device=self.device)
         self.normal = MultivariateNormal(mu, covar)
 
-        self.net = networks[cfg.network.name](dims=self.dims, cfg=cfg)
+        in_act_fn = Logit if len(dims) == 3 else Identity
+        self.net = networks[self.name](dims=self.dims, in_act_fn=in_act_fn, cfg=cfg)
         self.net.to(self.device)
 
         if cfg.optimizer.name == 'rmsprop':
@@ -61,12 +65,18 @@ class Model(object):
         else:
             raise Exception('optimizer "%s" is currently not supported' % (cfg.optimizer.name))
 
+    def train(self):
+        self.net.train()
+
+    def eval(self):
+        self.net.eval()
+
     def train_on_batch(self, y):
         y = y.to(self.device)
-        self.net.train()
 
         z, log_det_jacobian = self.net(y)
         z = z.view(y.size(0), -1)
+
         loss = -1.0 * torch.mean(self.normal.log_prob(z) + log_det_jacobian)
 
         self.optim.zero_grad()
@@ -94,9 +104,8 @@ class Model(object):
         z = self.sample_z(n)
         z = z.to(self.device)
 
-        with torch.no_grad():
-            y, log_det_jacobians = self.net.backward(z.view(-1, *self.dims))
-            log_p = self.normal.log_prob(z) - log_det_jacobians
+        y, log_det_jacobians = self.net.backward(z.view(-1, *self.dims))
+        log_p = self.normal.log_prob(z) - log_det_jacobians
 
         return y, torch.exp(log_p)
 
@@ -117,6 +126,130 @@ class Model(object):
     def pz(self, z):
         return torch.exp(self.log_pz(z))
 
+    def report(self, writer, y_data, step=0, save_files=False):
+        # set to evaluation mode
+        self.net.eval()
+
+        # prepare
+        y_data = y_data.to(self.device)
+        n_samples = y_data.size(0)
+        if y_data.dim() == 2 and y_data.size(1) == 2:
+            dtype = '2d'
+        elif y_data.dim() == 2 and y_data.size(1) == 3:
+            dtype = '3d'
+        else:
+            dtype = 'image'
+
+        title = '%s_%d_steps' % (self.name, step)
+
+        # testing
+        if dtype == '2d':
+            # plot latent samples
+            z, _ = self.net(y_data)
+            pz = self.pz(z)
+            z = z.detach().cpu().numpy()
+            pz = pz.detach().cpu().numpy()
+            xs = z[:, 0]
+            ys = z[:, 1]
+
+            z_image = scatter_plot(xs, ys, colors=pz, title=title)
+            writer.add_image('2d/train/z', z_image, step, dataformats='HWC')
+
+            if save_image:
+                out_file = 'z_sample_{:06d}.jpg'
+                save_image(out_file, z_image)
+                latest_file = 'z_sample_latest.jpg'
+                shutil.copyfile(out_file, latest_file)
+
+            # save plot
+            y, py = self.sample_y(max(100, n_samples))
+            y = y.detach().cpu().numpy()
+            py = py.detach().cpu().numpy()
+            xs = y[:, 0]
+            ys = y[:, 1]
+
+            y_image = scatter_plot(xs, ys, colors=py, title=title)
+            writer.add_image('2d/test/y', y_image, step, dataformats='HWC')
+
+            if save_image:
+                out_file = 'y_sample_{:06d}.jpg'.format(step)
+                save_image(out_file, y_image)
+                latest_file = 'y_sample_latest.jpg'
+                shutil.copyfile(out_file, latest_file)
+
+            # 2D visualization
+            map_size = 256
+            ix = (np.arange(map_size) + 0.5) / map_size * 2.0 - 1.0
+            iy = (np.arange(map_size) + 0.5) / map_size * -2.0 + 1.0
+
+            ix, iy = np.meshgrid(ix, iy)
+            ix = ix.reshape((-1))
+            iy = iy.reshape((-1))
+            y = np.stack([ix, iy], axis=1)
+            y = torch.tensor(y, dtype=torch.float32, requires_grad=True)
+
+            py = self.py(y)
+            py = py.detach().cpu().numpy()
+            py_map = py.reshape((map_size, map_size))
+
+            map_image = image_plot(py_map, title=title)
+            writer.add_image('2d/test/map', map_image, step, dataformats='HWC')
+
+            if save_image:
+                out_file = 'y_dist_{:06d}.jpg'.format(step)
+                save_image(out_file, map_image)
+                latest_file = 'y_dist_latest.jpg'
+                shutil.copyfile(out_file, latest_file)
+
+        if dtype == '3d':
+            # plot latent samples
+            z, _ = self.net(y_data)
+            pz = self.pz(z)
+            z = z.detach().cpu().numpy()
+            pz = pz.detach().cpu().numpy()
+            xs = z[:, 0]
+            ys = z[:, 1]
+            zs = z[:, 2]
+
+            z_image = scatter_plot(xs, ys, zs, colors=pz, title=title)
+            writer.add_image('3d/train/z', z_image, step, dataformats='HWC')
+
+            if save_image:
+                out_file = 'z_sample_{:06d}.jpg'.format(step)
+                save_image(out_file, z_image)
+                latest_file = 'z_sample_latest.jpg'
+                shutil.copyfile(out_file, latest_file)
+
+            # save plot
+            y, py = self.sample_y(max(100, n_samples))
+            y = y.detach().cpu().numpy()
+            py = py.detach().cpu().numpy()
+            xs = y[:, 0]
+            ys = y[:, 1]
+            zs = y[:, 2]
+
+            y_image = scatter_plot(xs, ys, zs, colors=py, title=title)
+            writer.add_image('3d/test/y', y_image, step, dataformats='HWC')
+
+            if save_image:
+                out_file = 'y_sample_{:06d}.jpg'.format(step)
+                save_image(out_file, y_image)
+                latest_file = 'y_sample_latest.jpg'
+                shutil.copyfile(out_file, latest_file)
+
+        if dtype == 'image':
+            images = torch.from_numpy(y[:100])
+            images = torch.clamp(images, 0.0, 1.0)
+            grid_image = torchvision.utils.make_grid(images, nrow=10, pad_value=1)
+            grid_image = grid_image.permute(1, 2, 0).numpy()
+            writer.add_image('image/test/grid', grid_image, step, dataformats='HWC')
+
+            if save_image:
+                out_file = 'y_image_{:06d}.jpg'.format(step)
+                save_image(out_file, grid_image)
+                latest_file = 'y_image_latest.jpg'
+                shutil.copyfile(out_file, latest_file)
+
 
 @hydra.main(config_path='configs', config_name='default')
 def main(cfg):
@@ -126,26 +259,28 @@ def main(cfg):
     print('*********************')
     print('')
 
-    workdir = hydra.utils.get_original_cwd()
+    # dataset
+    dataset = FlowDataLoader(cfg.run.distrib,
+                             batch_size=cfg.train.samples,
+                             total_steps=cfg.train.steps,
+                             shuffle=True)
+
+    # setup train/eval model
+    model = Model(dims=dataset.dims, cfg=cfg)
+
+    # summary writer
+    writer = SummaryWriter('./')
 
     # CuDNN backends
     if cfg.run.debug:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         torch.autograd.set_detect_anomaly(True)
+        for submodule in model.net.modules():
+            submodule.register_forward_hook(anomaly_hook)
+
     else:
         torch.backends.cudnn.benchmark = True
-
-    # setup output directory
-    out_dir = os.path.join(workdir, cfg.run.output, cfg.network.name, cfg.run.distrib)
-    os.makedirs(out_dir, exist_ok=True)
-
-    # dataset
-    dset = FlowDataset(cfg.run.distrib)
-    data_loader = torch.utils.data.DataLoader(dset, batch_size=cfg.train.samples, shuffle=True)
-
-    # setup train/eval model
-    model = Model(dims=dset.dims, cfg=cfg)
 
     # resume from checkpoint
     start_step = 0
@@ -154,104 +289,32 @@ def main(cfg):
 
     # training
     step = start_step
-    for data in cycle(data_loader):
+    for data in dataset:
         # training
+        model.train()
         start_time = time.perf_counter()
         y = data
         z, loss = model.train_on_batch(y)
         elapsed_time = time.perf_counter() - start_time
-
-        step += 1
 
         if step % (cfg.run.display * 10) == 0:
             # logging
             logger.info('[%d/%d] loss=%.5f [%.3f s/it]' %
                         (step, cfg.train.steps, loss.item(), elapsed_time))
 
-        if step % (cfg.run.display * 500) == 0:
-            # testing
-            y, py = model.sample_y(max(100, cfg.train.samples))
-            y = y.detach().cpu().numpy()
-            py = py.detach().cpu().numpy()
+        if step % (cfg.run.display * 100) == 0:
+            writer.add_scalar('{:s}/train/loss'.format(dataset.dtype), loss.item(), step)
+            save_files = step % (cfg.run.display * 1000) == 0
+            model.report(writer, y, step=step, save_files=save_files)
+            writer.flush()
 
-            if dset.dtype == '2d':
-                # plot latent samples
-                pz = model.pz(z)
-                z = z.detach().cpu().numpy()
-                pz = pz.detach().cpu().numpy()
-                xs = z[:, 0]
-                ys = z[:, 1]
-
-                out_file = os.path.join(out_dir, 'z_sample_{:06d}.jpg'.format(step))
-                save_plot(out_file, xs, ys, colors=pz)
-                latest_file = os.path.join(out_dir, 'z_sample_latest.jpg')
-                shutil.copyfile(out_file, latest_file)
-
-                # save plot
-                xs = y[:, 0]
-                ys = y[:, 1]
-
-                out_file = os.path.join(out_dir, 'y_sample_{:06d}.jpg'.format(step))
-                save_plot(out_file, xs, ys, colors=py)
-                latest_file = os.path.join(out_dir, 'y_sample_latest.jpg')
-                shutil.copyfile(out_file, latest_file)
-
-                # 2D visualization
-                map_size = 256
-                ix = (np.arange(map_size) + 0.5) / map_size * 2.0 - 1.0
-                iy = (np.arange(map_size) + 0.5) / map_size * -2.0 + 1.0
-
-                ix, iy = np.meshgrid(ix, iy)
-                ix = ix.reshape((-1))
-                iy = iy.reshape((-1))
-                y = np.stack([ix, iy], axis=1)
-                y = torch.tensor(y, dtype=torch.float32, requires_grad=True)
-                py = model.py(y)
-                py = py.detach().cpu().numpy()
-                py_map = py.reshape((map_size, map_size))
-
-                out_file = os.path.join(out_dir, 'y_dist_{:06d}.jpg'.format(step))
-                save_image_plot(out_file, py_map)
-                latest_file = os.path.join(out_dir, 'y_dist_latest.jpg')
-                shutil.copyfile(out_file, latest_file)
-
-            if dset.dtype == '3d':
-                # plot latent samples
-                pz = model.pz(z)
-                z = z.detach().cpu().numpy()
-                pz = pz.detach().cpu().numpy()
-                xs = z[:, 0]
-                ys = z[:, 1]
-                zs = z[:, 2]
-
-                out_file = os.path.join(out_dir, 'z_sample_{:06d}.jpg'.format(step))
-                save_plot(out_file, xs, ys, zs, colors=pz)
-                latest_file = os.path.join(out_dir, 'z_sample_latest.jpg')
-                shutil.copyfile(out_file, latest_file)
-
-                # save plot
-                xs = y[:, 0]
-                ys = y[:, 1]
-                zs = y[:, 2]
-
-                out_file = os.path.join(out_dir, 'y_sample_{:06d}.jpg'.format(step))
-                save_plot(out_file, xs, ys, zs, colors=py)
-                latest_file = os.path.join(out_dir, 'y_sample_latest.jpg')
-                shutil.copyfile(out_file, latest_file)
-
-            if dset.dtype == 'image':
-                images = torch.from_numpy(y[:100])
-                images = torch.clamp(images, -1.0, 1.0) * 0.5 + 0.5
-                grid_image = torchvision.utils.make_grid(images, nrow=10, pad_value=1)
-                grid_image = grid_image.permute(1, 2, 0).numpy()
-                out_file = os.path.join(out_dir, 'y_image_{:06d}.jpg'.format(step))
-                save_image(out_file, grid_image)
-                latest_file = os.path.join(out_dir, 'y_image_latest.jpg')
-                shutil.copyfile(out_file, latest_file)
-
+        if step % (cfg.run.display * 1000) == 0:
             # save ckpt
-            ckpt_file = os.path.join(out_dir, 'latest.pth')
+            ckpt_file = 'latest.pth'
             model.save_ckpt(step, ckpt_file)
+
+        # update for the next step
+        step += 1
 
 
 if __name__ == '__main__':
