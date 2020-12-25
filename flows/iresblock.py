@@ -23,7 +23,7 @@ class InvertibleResBlock(nn.Module):
                  n_layers=2,
                  activation='lipswish',
                  ftol=1.0e-4,
-                 logdet_estimate_method='fixed'):
+                 logdet_estimate_method='unbias'):
         super(InvertibleResBlock, self).__init__()
 
         self.ftol = ftol
@@ -41,8 +41,6 @@ class InvertibleResBlock(nn.Module):
         self.g_fn = nn.Sequential(*layers)
 
     def forward(self, x, log_det_jacobians):
-        B, C = x.size()
-
         g, logdet = self.proc_g_fn(self.logdet_fn, x, self.g_fn, self.training)
 
         z = x + g

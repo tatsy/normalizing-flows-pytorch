@@ -21,11 +21,11 @@ def _trace_df_dz_exact(f, z):
     matrix trace using native auto-differentiation
     """
     n_dims = z.size(1)
-    diags = [torch.autograd.grad(f[:, i].sum(), z, create_graph=True)[0] for i in range(n_dims)]
-
-    diags = [diag[:, i] for i, diag in enumerate(diags)]
-    diags = torch.stack(diags, dim=1)
-    return torch.sum(diags, dim=1)
+    diags = [
+        torch.autograd.grad(f[:, i].sum(), z, create_graph=True, retain_graph=True)[0][:, i]
+        for i in range(n_dims)
+    ]
+    return sum(diags)
 
 
 def _trace_df_dz_approx(f, z, n_samples=1):

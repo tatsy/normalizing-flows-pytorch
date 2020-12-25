@@ -5,19 +5,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .odeint import odeint_adjoint as odeint
-# from .odeint import odeint
+# from .odeint import odeint_adjoint as odeint
+from .odeint import odeint
 from .jacobian import trace_df_dz
 
 
-def weights_init(m):
-    """
-    initialize weights as HyperXXXX layers work as identity by default
-    """
-    classname = m.__class__.__name__
-    if classname.find('Linear') != -1 or classname.find('Conv') != -1:
-        nn.init.constant_(m.weight, 0.0)
-        nn.init.normal_(m.bias, 0, 0.01)
+class ConcatLinear(nn.Module):
+    def __init__(self, dim_in, dim_out, base_filters):
+        super(ConcatLinear, self).__init__()
+        self._layer = nn.Linear(dim_in + 1, dim_out)
+
+    def forward(self, t, x):
+        tt = torch.ones_like(x[:, 0:1]) * t
+        ttx = torch.cat([tt, x], 1)
+        return self._layer(ttx)
 
 
 class HyperNetwork(nn.Module):
@@ -25,13 +26,7 @@ class HyperNetwork(nn.Module):
     def __init__(self, in_features, out_features, base_filters=8):
         super(HyperNetwork, self).__init__()
 
-        self.net = nn.Sequential(
-            nn.Linear(in_features, base_filters),
-            nn.Tanh(),
-            nn.Linear(base_filters, base_filters),
-            nn.Tanh(),
-            nn.Linear(base_filters, out_features),
-        )
+        self.net = nn.Sequential(nn.Linear(in_features, out_features))
 
     def forward(self, t):
         h = self.net(t)
@@ -46,15 +41,16 @@ class HyperLinear(nn.Module):
         self.weight_shape = [out_features, in_features]
         self.bias_shape = [out_features]
 
+        self.linear = nn.Linear(in_features, out_features)
         self.n_out_params = np.prod(self.weight_shape) + np.prod(self.bias_shape)
         self.hyper_net = HyperNetwork(1, self.n_out_params)
-        self.hyper_net.apply(weights_init)
 
-    def forward(self, x, t):
+    def forward(self, t, x):
         params = self.hyper_net(t)
         weight = params[:, :np.prod(self.weight_shape)].view(self.weight_shape)
         bias = params[:, np.prod(self.weight_shape):].view(self.bias_shape)
-        return F.linear(x, weight, bias)
+        scale = F.linear(x, weight, bias)
+        return self.linear(x) * torch.tanh(scale)
 
 
 class HyperConv2d(nn.Module):
@@ -75,27 +71,34 @@ class HyperConv2d(nn.Module):
         self.groups = groups
         self.weight_shape = [out_channels, in_channels // groups, kernel_size, kernel_size]
         self.bias_shape = [out_channels]
+
+        self.conv = nn.Conv2d(in_channels,
+                              out_channels,
+                              kernel_size,
+                              stride,
+                              padding,
+                              groups=groups)
         self.n_out_params = np.prod(self.weight_shape) + np.prod(self.bias_shape)
         self.hyper_net = HyperNetwork(1, self.n_out_params)
-        self.hyper_net.apply(weights_init)
 
-    def forward(self, x, t):
+    def forward(self, t, x):
         params = self.hyper_net(t)
         weight = params[:, :np.prod(self.weight_shape)].view(self.weight_shape)
         bias = params[:, np.prod(self.weight_shape):].view(self.bias_shape)
-        return F.conv2d(x,
-                        weight,
-                        bias,
-                        stride=self.stride,
-                        padding=self.padding,
-                        groups=self.groups)
+        scale = F.conv2d(x,
+                         weight,
+                         bias,
+                         stride=self.stride,
+                         padding=self.padding,
+                         groups=self.groups)
+        return self.conv(x) * torch.tanh(scale)
 
 
 class ODENet(nn.Module):
     """ continuous normalizing flow """
-    def __init__(self, dims, base_filters=8, n_layers=4, trace_estimate_method='exact'):
+    def __init__(self, dims, base_filters=8, n_layers=2, trace_estimate_method='exact'):
         super(ODENet, self).__init__()
-        self.trace_estimator_fn = partial(trace_df_dz, method=trace_estimate_method)
+        self.trace_fn = lambda f, z, method=trace_estimate_method: trace_df_dz(f, z, method)
 
         if len(dims) == 1:
             # density
@@ -118,15 +121,13 @@ class ODENet(nn.Module):
         z = states[0]
         with torch.enable_grad():
             z.requires_grad_(True)
-            t.requires_grad_(True)
-
-            dz_dt = z
+            dz_dt = z.clone()
             for i, layer in enumerate(self.layers):
-                dz_dt = layer(dz_dt, t)
+                dz_dt = layer(t, dz_dt)
                 if i != len(self.layers) - 1:
                     dz_dt = F.softplus(dz_dt)
 
-            dlogpz_dt = self.trace_estimator_fn(dz_dt, z)
+            dlogpz_dt = -1.0 * self.trace_fn(dz_dt, z)
 
         return dz_dt, dlogpz_dt
 
@@ -141,15 +142,15 @@ class CNF(nn.Module):
         self.register_buffer('times', times)
 
     def forward(self, z, log_df_dz):
-        times = reversed(self.times)
+        times = torch.flip(self.times, dims=[0])
         states = odeint(self.func, (z, log_df_dz), times, self.method)
         z = states[0]
         log_df_dz = states[1]
-        return z, log_df_dz
+        return (z, log_df_dz)
 
     def backward(self, z, log_df_dz):
         times = self.times
         states = odeint(self.func, (z, log_df_dz), times, self.method)
         z = states[0]
         log_df_dz = states[1]
-        return z, log_df_dz
+        return (z, log_df_dz)

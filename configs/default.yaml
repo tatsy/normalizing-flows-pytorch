@@ -13,7 +13,7 @@ train:
 optimizer:
   name: adam
   lr: 1.0e-4
-  weight_decay: 1.0e-5
+  weight_decay: 0.0
 
 run:
   gpu: 0
