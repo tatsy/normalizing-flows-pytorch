@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.autograd
 
 from .modules import ActNorm, Identity
-from .iresblock import InvertibleResBlock
+from .iresblock import InvertibleResConv2d, InvertibleResLinear
 
 
 class ResFlow(nn.Module):
@@ -17,7 +17,8 @@ class ResFlow(nn.Module):
         layers = []
         for i in range(self.n_layers):
             actnorms.append(ActNorm(dims))
-            layers.append(InvertibleResBlock(dims[0], logdet_estimate_method=cfg.network.logdet))
+            layers.append(
+                InvertibleResLinear(dims[0], dims[0], logdet_estimate_method=cfg.network.logdet))
 
         self.in_act_fn = in_act_fn() if in_act_fn is not None else Identity()
         self.actnorms = nn.ModuleList(actnorms)

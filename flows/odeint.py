@@ -77,35 +77,35 @@ class AdaptiveOdeIntSolver(object):
 
     def _step_fn(self, t, x, dt):
         dx = torch.zeros_like(x)
-        k0 = self.func(t, x)
+        k0 = dt * self.func(t, x)
         ks = [k0]
-        for i in range(self.order):
+        for i in range(self.order + 1):
             kx = sum([k * c for k, c in zip(ks, self.c_x[i])])
             ki = dt * self.func(t + self.c_time[i] * dt, x + kx)
             ks.append(ki)
 
-        x_new = sum([k * c for k, c in zip(ks, self.c_x[-1])])
+        dx = sum([k * c for k, c in zip(ks, self.c_x[-1])])
         x_err = sum([k * c for k, c in zip(ks, self.c_err)])
 
-        etol = self.atol + self.rtol * torch.max(x.abs(), x_new.abs())
-        err_norm = (x_err / etol).pow(2).mean().sqrt()
-        dt_new = dt * (0.9 / err_norm).pow(1.0 / self.order)
+        etol = self.atol + self.rtol * torch.max(x.abs(), (x + dx).abs())
+        err_norm = (x_err / etol).pow(2).mean().sqrt().pow(self.order)
+        dt_new = dt * (0.9 / err_norm)
 
-        return x_new, dt_new
+        return dx, dt_new
 
 
 class Dopri5(AdaptiveOdeIntSolver):
     def __init__(self, func, rtol=1.0e-3, atol=1.0e-3):
         super(Dopri5, self).__init__(func, rtol, atol)
         self.order = 5
-        self.c_time = [1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0]
+        self.c_time = [1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0, 1.0]
         self.c_x = [
             [1.0 / 5.0],
             [3.0 / 40.0, 9.0 / 40.0],
             [44.0 / 45.0, -56.0 / 15.0, 32.0 / 9.0],
             [19372.0 / 6561.0, -25360.0 / 2187.0, 64448.0 / 6561.0, -212.0 / 729.0],
             [9017.0 / 3168.0, -355.0 / 33.0, 46732.0 / 5247.0, 49.0 / 176.0, -5103.0 / 18656.0],
-            [35.0 / 384.0, 0.0, 500.0 / 1113.0, 125.0 / 192.0, -2187.0 / 6784.0, 11.0 / 84.0, 0.0],
+            [35.0 / 384.0, 0.0, 500.0 / 1113.0, 125.0 / 192.0, -2187.0 / 6784.0, 11.0 / 84.0],
         ]
         self.c_err = [
             35.0 / 384.0 - 5179.0 / 57600.0,
