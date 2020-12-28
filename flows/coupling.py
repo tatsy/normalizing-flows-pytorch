@@ -6,6 +6,9 @@ from .squeeze import Squeeze1d, Squeeze2d
 
 
 class AbstractCoupling(nn.Module):
+    """
+    abstract class for bijective coupling layers
+    """
     def __init__(self, dims, odd=False):
         super(AbstractCoupling, self).__init__()
         self.dims = dims
@@ -39,7 +42,9 @@ class AbstractCoupling(nn.Module):
 
 
 class AdditiveCoupling(AbstractCoupling):
-    """ additive coupling used in NICE """
+    """
+    additive coupling used in NICE
+    """
     def __init__(self, dims, odd=False):
         super(AdditiveCoupling, self).__init__(dims, odd)
         if len(dims) == 1:
@@ -63,7 +68,9 @@ class AdditiveCoupling(AbstractCoupling):
 
 
 class AffineCoupling(AbstractCoupling):
-    """ affine coupling used in Real NVP """
+    """
+    affine coupling used in Real NVP
+    """
     def __init__(self, dims, odd=False):
         super(AffineCoupling, self).__init__(dims, odd)
         if len(dims) == 1:
@@ -93,7 +100,9 @@ class AffineCoupling(AbstractCoupling):
 
 
 class ContinuousMixtureCoupling(AbstractCoupling):
-    """ continuous mixture coupling used in Flow++ """
+    """
+    continuous mixture coupling used in Flow++
+    """
     def __init__(self, dims, odd=False, n_mixtures=4):
         super(ContinuousMixtureCoupling, self).__init__(dims, odd)
         self.n_mixtures = n_mixtures

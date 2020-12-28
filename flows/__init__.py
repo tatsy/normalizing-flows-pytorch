@@ -1,5 +1,7 @@
 """
 normalizing flows
+---
+MIT License (c) 2020, Tatsuya Yatagawa
 """
 from .glow import Glow
 from .ffjord import Ffjord
