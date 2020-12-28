@@ -18,23 +18,23 @@ class AbstractCoupling(nn.Module):
         else:
             raise Exception('unsupported dimensions: %s' % (str(dims)))
 
-    def forward(self, z, log_det_jacob):
+    def forward(self, z, log_df_dz):
         z0, z1 = self.squeeze.split(z)
-        z0, z1, log_det_jacob = self._transform(z0, z1, log_det_jacob)
+        z0, z1, log_df_dz = self._transform(z0, z1, log_df_dz)
         z = self.squeeze.merge(z0, z1)
-        return z, log_det_jacob
+        return z, log_df_dz
 
-    def backward(self, y, log_det_jacob):
+    def backward(self, y, log_df_dz):
         y0, y1 = self.squeeze.split(y)
-        y0, y1, log_det_jacob = self._inverse_transform(y0, y1, log_det_jacob)
+        y0, y1, log_df_dz = self._inverse_transform(y0, y1, log_df_dz)
         y = self.squeeze.merge(y0, y1)
 
-        return y, log_det_jacob
+        return y, log_df_dz
 
-    def _transform(self, z0, z1, log_det_jacob):
+    def _transform(self, z0, z1, log_df_dz):
         pass
 
-    def _inverse_transform(self, z0, z1, log_det_jacob):
+    def _inverse_transform(self, z0, z1, log_df_dz):
         pass
 
 
@@ -49,17 +49,17 @@ class AdditiveCoupling(AbstractCoupling):
         elif len(dims) == 3:
             self.net_t = ConvNet(dims[0] * 2, dims[0] * 2)
 
-    def _transform(self, z0, z1, log_det_jacob):
+    def _transform(self, z0, z1, log_df_dz):
         t = self.net_t(z1)
         z0 = z0 + t
 
-        return z0, z1, log_det_jacob
+        return z0, z1, log_df_dz
 
-    def _inverse_transform(self, y0, y1, log_det_jacob):
+    def _inverse_transform(self, y0, y1, log_df_dz):
         t = self.net_t(y1)
         y0 = y0 - t
 
-        return y0, y1, log_det_jacob
+        return y0, y1, log_df_dz
 
 
 class AffineCoupling(AbstractCoupling):
@@ -75,21 +75,21 @@ class AffineCoupling(AbstractCoupling):
             self.net_s = ConvNet(dims[0] * 2, dims[0] * 2)
             self.net_t = ConvNet(dims[0] * 2, dims[0] * 2)
 
-    def _transform(self, z0, z1, log_det_jacob):
+    def _transform(self, z0, z1, log_df_dz):
         t = self.net_t(z1)
         s = torch.tanh(self.net_s(z1))
         z0 = z0 * torch.exp(s) + t
-        log_det_jacob += torch.sum(s.view(z0.size(0), -1), dim=1)
+        log_df_dz += torch.sum(s.view(z0.size(0), -1), dim=1)
 
-        return z0, z1, log_det_jacob
+        return z0, z1, log_df_dz
 
-    def _inverse_transform(self, y0, y1, log_det_jacob):
+    def _inverse_transform(self, y0, y1, log_df_dz):
         t = self.net_t(y1)
         s = torch.tanh(self.net_s(y1))
         y0 = torch.exp(-s) * (y0 - t)
-        log_det_jacob -= torch.sum(s.view(y0.size(0), -1), dim=1)
+        log_df_dz -= torch.sum(s.view(y0.size(0), -1), dim=1)
 
-        return y0, y1, log_det_jacob
+        return y0, y1, log_df_dz
 
 
 class ContinuousMixtureCoupling(AbstractCoupling):
@@ -116,7 +116,7 @@ class ContinuousMixtureCoupling(AbstractCoupling):
         self.logit = Logit()
         self.mix_log_cdf = MixLogCDF()
 
-    def _transform(self, z0, z1, log_det_jacobians):
+    def _transform(self, z0, z1, log_df_dz):
         B = z0.size(0)
         C = z0.size()[1:]
         a = torch.tanh(self.net_a(z1))
@@ -125,15 +125,15 @@ class ContinuousMixtureCoupling(AbstractCoupling):
         mu = self.net_mu(z1).view(B, self.n_mixtures, *C)
         s = self.net_s(z1).view(B, self.n_mixtures, *C)
 
-        z0, log_det_jacobians = self.mix_log_cdf(z0, pi, mu, s, log_det_jacobians)
-        z0, log_det_jacobians = self.logit(z0, log_det_jacobians)
+        z0, log_df_dz = self.mix_log_cdf(z0, pi, mu, s, log_df_dz)
+        z0, log_df_dz = self.logit(z0, log_df_dz)
 
         z0 = z0 * torch.exp(a) + b
-        log_det_jacobians += torch.sum(a.view(z0.size(0), -1), dim=1)
+        log_df_dz += torch.sum(a.view(z0.size(0), -1), dim=1)
 
-        return z0, z1, log_det_jacobians
+        return z0, z1, log_df_dz
 
-    def _inverse_transform(self, z0, z1, log_det_jacobians):
+    def _inverse_transform(self, z0, z1, log_df_dz):
         B = z0.size(0)
         C = z0.size()[1:]
         a = torch.tanh(self.net_a(z1))
@@ -143,9 +143,9 @@ class ContinuousMixtureCoupling(AbstractCoupling):
         s = self.net_s(z1).view(B, self.n_mixtures, *C)
 
         z0 = torch.exp(-a) * (z0 - b)
-        log_det_jacobians -= torch.sum(a.view(z0.size(0), -1), dim=1)
+        log_df_dz -= torch.sum(a.view(z0.size(0), -1), dim=1)
 
-        z0, log_det_jacobians = self.logit.backward(z0, log_det_jacobians)
-        z0, log_det_jacobians = self.mix_log_cdf.backward(z0, pi, mu, s, log_det_jacobians)
+        z0, log_df_dz = self.logit.backward(z0, log_df_dz)
+        z0, log_df_dz = self.mix_log_cdf.backward(z0, pi, mu, s, log_df_dz)
 
-        return z0, z1, log_det_jacobians
+        return z0, z1, log_df_dz
