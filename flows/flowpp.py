@@ -5,9 +5,9 @@ from .modules import ActNorm
 from .coupling import ContinuousMixtureCoupling
 
 
-class Flowxx(nn.Module):
+class Flowpp(nn.Module):
     def __init__(self, dims, cfg=None):
-        super(Flowxx, self).__init__()
+        super(Flowpp, self).__init__()
 
         self.dims = dims
         self.n_layers = cfg.network.layers
