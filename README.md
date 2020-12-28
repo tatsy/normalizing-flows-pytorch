@@ -1,6 +1,8 @@
 Normalizing Flows by PyTorch
 ===
 
+[![Codacy Badge](https://api.codacy.com/project/badge/Grade/251083f9ef644f738da9bd0f8c82b2a0)](https://app.codacy.com/gh/tatsy/normalizing-flows-pytorch?utm_source=github.com&utm_medium=referral&utm_content=tatsy/normalizing-flows-pytorch&utm_campaign=Badge_Grade)
+
 > PyTorch implementations of the networks for normalizing flows.
 
 Models
