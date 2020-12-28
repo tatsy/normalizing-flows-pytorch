@@ -152,7 +152,7 @@ class MixLogCDF(nn.Module):
     def backward(self, x, pi, mu, s, log_det_jacobians):
         lo = torch.full_like(x, -1.0e3)
         hi = torch.full_like(x, 1.0e3)
-        for it in range(100):
+        for _ in range(100):
             mid = (lo + hi) * 0.5
             val = mix_log_cdf(mid, pi, mu, s)
             lo = torch.where(val < x, mid, lo)
@@ -242,7 +242,7 @@ class MLP(nn.Module):
         )
 
         res_blocks = []
-        for i in range(n_blocks):
+        for _ in range(n_blocks):
             res_blocks.append(ResBlock1d(base_filters, base_filters, weight_norm))
 
         self.mid_block = nn.Sequential(*res_blocks)

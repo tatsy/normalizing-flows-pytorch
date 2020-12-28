@@ -10,14 +10,14 @@ def safe_detach(x):
     return x.detach().requires_grad_(x.requires_grad)
 
 
-def anomaly_hook(self, input, output):
+def anomaly_hook(self, inputs, outputs):
     """
     module hook for detecting NaN and infinity
     """
-    if not isinstance(output, tuple):
-        outputs = [output]
+    if not isinstance(outputs, tuple):
+        outputs = [outputs]
     else:
-        outputs = list(output)
+        outputs = list(outputs)
 
     for i, out in enumerate(outputs):
         inf_mask = torch.isinf(out)
@@ -34,4 +34,4 @@ def anomaly_hook(self, input, output):
 
         if inf_mask.any() or nan_mask.any():
             raise RuntimeError('Foud INF or NAN in output of', self.___class__.__name__,
-                               'from input tensor', input)
+                               'from input tensor', inputs)
