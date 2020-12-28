@@ -35,8 +35,8 @@ def _trace_df_dz_approx(f, z, n_samples=1):
     w_t_J_fn = lambda w, z=z, f=f: torch.autograd.grad(
         f, z, grad_outputs=w, retain_graph=True, create_graph=True)[0]
 
-    w = torch.randn([f.size(0), n_samples, f.size(1)], dtype=torch.float32)
-    w = w.to(z.device)
+    w = torch.randn([f.size(0), n_samples, f.size(1)])
+    w = w.type_as(z).to(z.device)
 
     w_t_J = [w_t_J_fn(w[:, i, :]) for i in range(n_samples)]
     w_t_J = torch.stack(w_t_J, dim=1)
@@ -66,8 +66,8 @@ def _logdet_df_dz_fixed(g, z, n_samples=1, n_power_series=16):
     w_t_J_fn = lambda w, z=z, g=g: torch.autograd.grad(
         g, z, grad_outputs=w, retain_graph=True, create_graph=True)[0]
 
-    v = torch.randn([g.size(0), n_samples, g.size(1)], dtype=torch.float32)
-    v = v.to(z.device)
+    v = torch.randn([g.size(0), n_samples, g.size(1)])
+    v = v.type_as(z).to(z.device)
 
     sum_diag = 0.0
     w = v.clone()
@@ -98,8 +98,8 @@ def _logdet_df_dz_unbias(g, z, n_samples=1, p=0.3):
     for j in range(n_samples):
         n_iters = np.random.geometric(p)
 
-        v = torch.randn([g.size(0), n_samples, g.size(1)], dtype=torch.float32)
-        v = v.to(z.device)
+        v = torch.randn([g.size(0), n_samples, g.size(1)])
+        v = v.type_as(z).to(z.device)
         w = v.clone()
 
         sum_diag = 0.0

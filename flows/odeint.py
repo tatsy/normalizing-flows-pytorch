@@ -3,7 +3,10 @@ import torch
 from .misc import safe_detach
 
 
-class OdeIntSolver(object):
+class ODESolver(object):
+    """
+    Fixed step size ODE solver
+    """
     def __init__(self, func):
         self.func = func
 
@@ -20,7 +23,10 @@ class OdeIntSolver(object):
         pass
 
 
-class Midpoint(OdeIntSolver):
+class Midpoint(ODESolver):
+    """
+    Fixed step size midpoint method
+    """
     def __init__(self, func):
         super(Midpoint, self).__init__(func)
 
@@ -30,7 +36,10 @@ class Midpoint(OdeIntSolver):
         return k2
 
 
-class RK4(OdeIntSolver):
+class RK4(ODESolver):
+    """
+    4-th order Runge-Kutta method
+    """
     def __init__(self, func):
         super(RK4, self).__init__(func)
 
@@ -43,8 +52,11 @@ class RK4(OdeIntSolver):
         return dx
 
 
-class AdaptiveOdeIntSolver(object):
-    def __init__(self, func, rtol=1.0e-3, atol=1.0e-3):
+class AdaptiveODESolver(object):
+    """
+    Base class for adaptive step size ODE solvers
+    """
+    def __init__(self, func, rtol, atol):
         self.func = func
         self.atol = atol
         self.rtol = rtol
@@ -76,7 +88,6 @@ class AdaptiveOdeIntSolver(object):
         return x
 
     def _step_fn(self, t, x, dt):
-        dx = torch.zeros_like(x)
         k0 = dt * self.func(t, x)
         ks = [k0]
         for i in range(self.order + 1):
@@ -88,14 +99,17 @@ class AdaptiveOdeIntSolver(object):
         x_err = sum([k * c for k, c in zip(ks, self.c_err)])
 
         etol = self.atol + self.rtol * torch.max(x.abs(), (x + dx).abs())
-        err_norm = (x_err / etol).pow(2).mean().sqrt().pow(self.order)
-        dt_new = dt * (0.9 / err_norm)
+        err_norm = (x_err / etol).pow(2).mean().add_(1.0e-6).sqrt()
+        dt_new = dt * (0.5 / err_norm)**(1.0 / self.order)
 
         return dx, dt_new
 
 
-class Dopri5(AdaptiveOdeIntSolver):
-    def __init__(self, func, rtol=1.0e-3, atol=1.0e-3):
+class Dopri5(AdaptiveODESolver):
+    """
+    Adaptive step size Dormand Prince method
+    """
+    def __init__(self, func, rtol=1.0e-2, atol=1.0e-2):
         super(Dopri5, self).__init__(func, rtol, atol)
         self.order = 5
         self.c_time = [1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0, 1.0]
@@ -145,7 +159,7 @@ def _to_flat(x):
     return torch.cat(x)
 
 
-def _func_wrapper(func, shape):
+def _tuple_func_wrapper(func, shape):
     def _func(t, x):
         x = _to_tuple(x, shape)
         dx = func(t, x)
@@ -164,7 +178,7 @@ def odeint(func, x, times, method):
     shapes = [x_.shape for x_ in x]
 
     x = _to_flat(x)
-    func = _func_wrapper(func, shapes)
+    func = _tuple_func_wrapper(func, shapes)
     solver = SOLVERS[method](func)
     x_new = solver.integrate(x, times)
     x_new = _to_tuple(x_new, shapes)
@@ -181,7 +195,7 @@ def odeint_adjoint(func, x, times, method):
     return x_new
 
 
-def aug_func_wrapper(func, t, states, *params):
+def aug_func_wrapper(func, t, states, z_shapes, *params):
     adj_z = states[0]
     z = states[1]
     params = tuple(params)
@@ -190,9 +204,10 @@ def aug_func_wrapper(func, t, states, *params):
         t = safe_detach(t)
         z = safe_detach(z)
         z.requires_grad_(True)
-        f, _ = func(t, (z, ))
+
+        f = _to_flat(func(t, _to_tuple(z, z_shapes)))
         vjp_z, *vjp_params = torch.autograd.grad(f, (z, ) + params,
-                                                 grad_outputs=-adj_z,
+                                                 grad_outputs=-1.0 * adj_z,
                                                  retain_graph=True,
                                                  allow_unused=True)
 
@@ -225,15 +240,16 @@ class OdeIntAdjoint(torch.autograd.Function):
         shapes = ctx.shapes
         method = ctx.method
         z, times, *params = ctx.saved_tensors
-        z = _to_tuple(z, shapes)[0]
+        adj_z = _to_flat((dL_dz, dL_dlogpz))
 
         with torch.no_grad():
             zero_params = [torch.zeros_like(p) for p in params]
-            aug_states = (dL_dz, z, *zero_params)
-            aug_func = lambda t, z, func=func, params=params: aug_func_wrapper(func, t, z, *params)
+            aug_states = (adj_z, z, *zero_params)
+            aug_func = lambda t, z, func=func, shapes=shapes, params=params: aug_func_wrapper(
+                func, t, z, shapes, *params)
             aug_states = odeint(aug_func, aug_states, reversed(times), method)
 
-        adj_states = _to_flat((aug_states[0], torch.zeros_like(dL_dlogpz)))
+        adj_states = aug_states[0]
         adj_params = aug_states[2:]
 
         return (None, adj_states, None, None, None, *adj_params)

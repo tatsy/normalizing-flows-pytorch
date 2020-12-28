@@ -41,7 +41,7 @@ class Ffjord(nn.Module):
         log_df_dz = torch.zeros(z.size(0)).type_as(z).to(z.device)
         z, log_df_dz = self.in_act_fn(z, log_df_dz)
         for i in range(self.n_layers):
-            z, log_df_dz = self.bnorms[i](z, log_df_dz)
+            # z, log_df_dz = self.bnorms[i](z, log_df_dz)
             z, log_df_dz = self.layers[i](z, log_df_dz)
 
         return z, log_df_dz
@@ -51,7 +51,7 @@ class Ffjord(nn.Module):
         log_df_dz = torch.zeros(z.size(0)).type_as(z).to(z.device)
         for i in reversed(range(self.n_layers)):
             z, log_df_dz = self.layers[i].backward(z, log_df_dz)
-            z, log_df_dz = self.bnorms[i].backward(z, log_df_dz)
+            # z, log_df_dz = self.bnorms[i].backward(z, log_df_dz)
         z, log_df_dz = self.in_act_fn.backward(z, log_df_dz)
 
         return z, log_df_dz

@@ -5,4 +5,5 @@ t1: 1
 layers: 8
 stepsize: 1
 solver: rk4
+backprop: normal
 trace: approx

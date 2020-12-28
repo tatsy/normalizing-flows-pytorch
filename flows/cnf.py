@@ -5,8 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# from .odeint import odeint_adjoint as odeint
-from .odeint import odeint
+from .odeint import odeint, odeint_adjoint
 from .jacobian import trace_df_dz
 
 
@@ -50,7 +49,7 @@ class HyperLinear(nn.Module):
         weight = params[:, :np.prod(self.weight_shape)].view(self.weight_shape)
         bias = params[:, np.prod(self.weight_shape):].view(self.bias_shape)
         scale = F.linear(x, weight, bias)
-        return self.linear(x) * torch.tanh(scale)
+        return self.linear(x) * torch.sigmoid(scale)
 
 
 class HyperConv2d(nn.Module):
@@ -91,7 +90,7 @@ class HyperConv2d(nn.Module):
                          stride=self.stride,
                          padding=self.padding,
                          groups=self.groups)
-        return self.conv(x) * torch.tanh(scale)
+        return self.conv(x) * torch.sigmoid(scale)
 
 
 class ODENet(nn.Module):
@@ -127,30 +126,55 @@ class ODENet(nn.Module):
                 if i != len(self.layers) - 1:
                     dz_dt = F.softplus(dz_dt)
 
-            dlogpz_dt = -1.0 * self.trace_fn(dz_dt, z)
+            dlogpz_dt = 1.0 * self.trace_fn(dz_dt, z)
 
         return dz_dt, dlogpz_dt
 
 
 class CNF(nn.Module):
-    def __init__(self, dims, times, solver_type, trace_estimate_method):
+    def __init__(self,
+                 dims,
+                 times,
+                 solver_type,
+                 trace_estimate_method,
+                 backprop='adjoint',
+                 dtype=torch.float64):
         super(CNF, self).__init__()
+        assert backprop in ['normal', 'adjoint'], 'unsupported backprop type "%s"' % (backprop)
 
         self.dims = dims
-        self.func = ODENet(dims, trace_estimate_method=trace_estimate_method)
+        self.dtype = dtype
+        self.func = ODENet(dims, trace_estimate_method=trace_estimate_method).type(self.dtype)
         self.method = solver_type
-        self.register_buffer('times', times)
+        self.backprop = backprop
+        self.register_buffer('times', times.type(self.dtype))
 
     def forward(self, z, log_df_dz):
+        org_type = z.type()
+
+        z, log_df_dz = z.type(self.dtype), log_df_dz.type(self.dtype)
         times = torch.flip(self.times, dims=[0])
-        states = odeint(self.func, (z, log_df_dz), times, self.method)
-        z = states[0]
-        log_df_dz = states[1]
+
+        if self.backprop == 'normal':
+            states = odeint(self.func, (z, log_df_dz), times, self.method)
+        elif self.backprop == 'adjoint':
+            states = odeint_adjoint(self.func, (z, log_df_dz), times, self.method)
+
+        z = states[0].type(org_type)
+        log_df_dz = states[1].type(org_type)
         return (z, log_df_dz)
 
     def backward(self, z, log_df_dz):
+        org_type = z.type()
+
+        z, log_df_dz = z.type(self.dtype), log_df_dz.type(self.dtype)
         times = self.times
-        states = odeint(self.func, (z, log_df_dz), times, self.method)
-        z = states[0]
-        log_df_dz = states[1]
+
+        if self.backprop == 'normal':
+            states = odeint(self.func, (z, log_df_dz), times, self.method)
+        elif self.backprop == 'adjoint':
+            states = odeint_adjoint(self.func, (z, log_df_dz), times, self.method)
+
+        z = states[0].type(org_type)
+        log_df_dz = states[1].type(org_type)
         return (z, log_df_dz)
