@@ -1,11 +1,10 @@
 import os
-import time
 
 import hydra
 import numpy as np
 import torch
-import sklearn
 import torchvision
+import sklearn.datasets
 
 N_DATASET_SIZE = 65536
 

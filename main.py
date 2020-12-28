@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-from flows import Glow, Ffjord, Flowxx, RealNVP, ResFlow
+from flows import Glow, Ffjord, Flowpp, RealNVP, ResFlow
 from flows.misc import anomaly_hook
 from common.utils import image_plot, save_image, scatter_plot
 from flows.dataset import FlowDataLoader
@@ -19,7 +19,7 @@ from common.logging import Logging
 networks = {
     'realnvp': RealNVP,
     'glow': Glow,
-    'flow++': Flowxx,
+    'flow++': Flowpp,
     'resflow': ResFlow,
     'ffjord': Ffjord,
 }
@@ -190,7 +190,7 @@ class Model(object):
             py = py.detach().cpu().numpy()
             py_map = py.reshape((map_size, map_size))
 
-            map_image = image_plot(py_map, title=title)
+            map_image = image_plot(py_map, title=title, extent=[-1, 1, -1, 1])
             writer.add_image('2d/test/map', map_image, step, dataformats='HWC')
 
             if save_image:

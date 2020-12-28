@@ -6,6 +6,9 @@ from colorama import Fore
 
 
 class Logging(object):
+    """
+    Logging class with colored message types
+    """
     def __init__(self, name=None):
         colorama.init(autoreset=True)
 

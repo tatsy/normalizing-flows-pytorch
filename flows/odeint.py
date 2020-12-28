@@ -172,7 +172,7 @@ def _tuple_func_wrapper(func, shape):
 def odeint(func, x, times, method):
     if isinstance(x, torch.Tensor):
         x = (x, )
-    elif type(x) != tuple:
+    elif not isinstance(x, tuple):
         raise Exception('"odeint" input must be torch.Tensor or tuple')
 
     shapes = [x_.shape for x_ in x]

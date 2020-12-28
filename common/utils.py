@@ -1,15 +1,12 @@
 import matplotlib
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 matplotlib.use('Agg')
 
 import numpy as np
-import torch
-import torchvision
-import sklearn.datasets
 import matplotlib.pyplot as plt
 from PIL import Image
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 
 def scatter_plot(xs, ys, zs=None, colors=None, title=None):
@@ -50,7 +47,7 @@ def image_plot(image,
                cmap='inferno',
                vmin=0.0,
                vmax=1.0,
-               extent=[-1, 1, -1, 1],
+               extent=None,
                axis=True,
                title=None,
                colorbar=True):

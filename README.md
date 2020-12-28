@@ -21,9 +21,7 @@ Currently, following networks are implemented.
 * FFJORD
   * Grathwohl et al., 2018, "FFJORD: Free-form Continuous Dynamics for Scalable Reversible Generative Models," [[arXiv]](https://arxiv.org/abs/1810.01367) [[code]](https://github.com/rtqichen/ffjord)
 
-
-### Note
-
+**Note:**
 This repository is for easier understanding of the above networks. Therefore, you should use official source cods if provided.
 
 Setup
@@ -52,8 +50,7 @@ $ python main.py \
     train.distrib=[circles, moons, normals, swiss, s_curve, mnist, cifar10]
 ```
 
-### Note
-
+**Note:**
 Currently, I tested the networks only for 2D density transformation. So, results for 3D densities (`swiss` and `s_curve`) and images (`mnist` and `cifar10`) could be what you expect.
 
 Screen shots
