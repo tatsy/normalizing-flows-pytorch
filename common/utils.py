@@ -20,6 +20,7 @@ def scatter_plot(xs, ys, zs=None, colors=None, title=None):
         # 2D
         ax = fig.add_subplot(111)
         scatter = ax.scatter(xs, ys, c=colors, cmap='jet')  #, vmin=0.0, vmax=5.0)
+        ax.set_aspect('equal', adjustable='box')
     else:
         # 3D
         ax = fig.add_subplot(111, projection='3d')
@@ -28,7 +29,6 @@ def scatter_plot(xs, ys, zs=None, colors=None, title=None):
         ax.set_zticks(np.linspace(-1, 1, 5))
         scatter = ax.scatter(xs, ys, zs, c=colors, cmap='jet')  #, vmin=0.0, vmax=5.0)
 
-    ax.set_aspect('equal', adjustable='box')
     ax.set_xlim([-1, 1])
     ax.set_xticks(np.linspace(-1, 1, 5))
     ax.set_ylim([-1, 1])

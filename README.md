@@ -1,6 +1,8 @@
 Normalizing Flows by PyTorch
 ===
 
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/95bd163ba34a495789e073b94bd2da3d)](https://www.codacy.com/gh/tatsy/normalizing-flows-pytorch/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=tatsy/normalizing-flows-pytorch&amp;utm_campaign=Badge_Grade)
+
 > PyTorch implementations of the networks for normalizing flows.
 
 Models
@@ -19,10 +21,10 @@ Currently, following networks are implemented.
 * FFJORD
   * Grathwohl et al., 2018, "FFJORD: Free-form Continuous Dynamics for Scalable Reversible Generative Models," [[arXiv]](https://arxiv.org/abs/1810.01367) [[code]](https://github.com/rtqichen/ffjord)
 
-### Remark
+
+### Note
 
 This repository is for easier understanding of the above networks. Therefore, you should use official source cods if provided.
-
 
 Setup
 ---
