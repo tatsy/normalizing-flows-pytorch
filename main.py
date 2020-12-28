@@ -190,7 +190,7 @@ class Model(object):
             py = py.detach().cpu().numpy()
             py_map = py.reshape((map_size, map_size))
 
-            map_image = image_plot(py_map, title=title)
+            map_image = image_plot(py_map, title=title, extent=[-1, 1, -1, 1])
             writer.add_image('2d/test/map', map_image, step, dataformats='HWC')
 
             if save_image:
