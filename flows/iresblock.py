@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from .modules import LipSwish
-from .jacobian import logdet_df_dz, basic_logdet_wrapper, memory_saved_logdet_wrapper
+from .jacobian import logdet_df_dz, memory_saved_logdet_wrapper
 from .spectral_norm import SpectralNorm as spectral_norm
 
 activations = {
