@@ -16,7 +16,9 @@ activations = {
 
 
 class InvertibleResBlockBase(nn.Module):
-    """ invertible residual block """
+    """
+    invertible residual block
+    """
     def __init__(self, ftol=1.0e-4, logdet_estimate_method='unbias'):
         super(InvertibleResBlockBase, self).__init__()
 
