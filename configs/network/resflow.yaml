@@ -1,4 +1,4 @@
 # @package network
 name: resflow
 logdet: unbias
-
+spnorm_coeff: 0.9

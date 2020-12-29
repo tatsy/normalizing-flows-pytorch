@@ -1,5 +1,3 @@
-from functools import partial
-
 import torch
 import torch.nn as nn
 
@@ -19,22 +17,22 @@ class InvertibleResBlockBase(nn.Module):
     """
     invertible residual block
     """
-    def __init__(self, ftol=1.0e-4, logdet_estimate_method='unbias'):
+    def __init__(self, coeff=0.97, ftol=1.0e-4, logdet_estimate_method='unbias'):
         super(InvertibleResBlockBase, self).__init__()
 
+        self.coeff = coeff
         self.ftol = ftol
-        self.logdet_fn = partial(logdet_df_dz, method=logdet_estimate_method)
+        self.logdet_fn = lambda g, z, method=logdet_estimate_method: logdet_df_dz(g, z, method)
         self.proc_g_fn = memory_saved_logdet_wrapper
         self.g_fn = nn.Sequential()
 
-    def forward(self, x, log_det_jacobians):
+    def forward(self, x, log_df_dz):
         g, logdet = self.proc_g_fn(self.logdet_fn, x, self.g_fn, self.training)
-
         z = x + g
-        log_det_jacobians += logdet
-        return z, log_det_jacobians
+        log_df_dz += logdet
+        return z, log_df_dz
 
-    def backward(self, z, log_det_jacobians):
+    def backward(self, z, log_df_dz):
         n_iters = 100
         x = z.clone()
 
@@ -47,10 +45,10 @@ class InvertibleResBlockBase(nn.Module):
                 if torch.all(torch.abs(x - prev_x) < self.ftol):
                     break
 
-            logdet = torch.zeros_like(log_det_jacobians)
+            logdet = torch.zeros_like(log_df_dz)
             _, logdet = self.forward(x, logdet)
 
-        return x, log_det_jacobians - logdet
+        return x, log_df_dz - logdet
 
 
 class InvertibleResLinear(InvertibleResBlockBase):
@@ -60,15 +58,16 @@ class InvertibleResLinear(InvertibleResBlockBase):
                  base_filters=32,
                  n_layers=2,
                  activation='lipswish',
+                 coeff=0.97,
                  ftol=1.0e-4,
                  logdet_estimate_method='unbias'):
-        super(InvertibleResLinear, self).__init__(ftol, logdet_estimate_method)
+        super(InvertibleResLinear, self).__init__(coeff, ftol, logdet_estimate_method)
 
         act_fn = activations[activation]
         hidden_dims = [in_features] + [base_filters] * n_layers + [out_features]
         layers = []
         for i, (in_dims, out_dims) in enumerate(zip(hidden_dims[:-1], hidden_dims[1:])):
-            layers.append(spectral_norm(nn.Linear(in_dims, out_dims)))
+            layers.append(spectral_norm(nn.Linear(in_dims, out_dims), coeff=self.coeff))
             if i != len(hidden_dims) - 2:
                 layers.append(act_fn())
 
@@ -82,15 +81,16 @@ class InvertibleResConv2d(InvertibleResBlockBase):
                  base_filters=32,
                  n_layers=2,
                  activation='lipswish',
+                 coeff=0.97,
                  ftol=1.0e-4,
                  logdet_estimate_method='unbias'):
-        super(InvertibleResConv2d, self).__init__(ftol, logdet_estimate_method)
+        super(InvertibleResConv2d, self).__init__(coeff, ftol, logdet_estimate_method)
 
         act_fn = activations[activation]
         hidden_dims = [in_channels] + [base_filters] * n_layers + [out_channels]
         layers = []
         for i, (in_dims, out_dims) in enumerate(zip(hidden_dims[:-1], hidden_dims[1:])):
-            layers.append(spectral_norm(nn.Conv2d(in_dims, out_dims, 3, 1, 1)))
+            layers.append(spectral_norm(nn.Conv2d(in_dims, out_dims, 3, 1, 1), coeff=self.coeff))
             if i != len(hidden_dims) - 2:
                 layers.append(act_fn())
 

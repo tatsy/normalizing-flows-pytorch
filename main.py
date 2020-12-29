@@ -34,7 +34,7 @@ logger = Logging(__file__)
 # train/eval model
 # -----------------------------------------------
 class Model(object):
-    def __init__(self, dims=(2, ), cfg=None):
+    def __init__(self, dims=(2, ), datatype=None, cfg=None):
         if torch.cuda.is_available():
             self.device = torch.device('cuda', cfg.run.gpu)
         else:
@@ -48,8 +48,7 @@ class Model(object):
         covar = torch.eye(self.dimension, dtype=torch.float32, device=self.device)
         self.normal = MultivariateNormal(mu, covar)
 
-        in_act_fn = Logit if len(dims) == 3 else Identity
-        self.net = networks[self.name](dims=self.dims, in_act_fn=in_act_fn, cfg=cfg)
+        self.net = networks[self.name](dims=self.dims, datatype=datatype, cfg=cfg.network)
         self.net.to(self.device)
 
         if cfg.optimizer.name == 'rmsprop':
@@ -59,6 +58,7 @@ class Model(object):
         elif cfg.optimizer.name == 'adam':
             self.optim = torch.optim.Adam(self.net.parameters(),
                                           lr=cfg.optimizer.lr,
+                                          betas=(cfg.optimizer.beta1, cfg.optimizer.beta2),
                                           weight_decay=cfg.optimizer.weight_decay)
         else:
             raise Exception('optimizer "%s" is currently not supported' % (cfg.optimizer.name))
@@ -236,6 +236,8 @@ class Model(object):
                 shutil.copyfile(out_file, latest_file)
 
         if dtype == 'image':
+            y, _ = self.sample_y(max(100, n_samples))
+            y = y.detach().cpu().numpy()
             images = torch.from_numpy(y[:100])
             images = torch.clamp(images, 0.0, 1.0)
             grid_image = torchvision.utils.make_grid(images, nrow=10, pad_value=1)
@@ -264,7 +266,7 @@ def main(cfg):
                              shuffle=True)
 
     # setup train/eval model
-    model = Model(dims=dataset.dims, cfg=cfg)
+    model = Model(dims=dataset.dims, datatype=dataset.dtype, cfg=cfg)
 
     # summary writer
     writer = SummaryWriter('./')

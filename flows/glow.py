@@ -2,7 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .modules import ActNorm, Identity
+from .modules import Logit, ActNorm, Compose
+from .squeeze import Squeeze2d, Unsqueeze2d
 from .coupling import AffineCoupling
 
 
@@ -65,51 +66,51 @@ class InvertibleConv1x1(nn.Module):
 
 
 class Glow(nn.Module):
-    def __init__(self, dims, in_act_fn=None, cfg=None):
+    def __init__(self, dims, datatype=None, cfg=None):
         super(Glow, self).__init__()
 
         self.dims = dims
-        self.n_layers = cfg.network.layers
+        self.n_layers = cfg.layers
 
-        actnorms = []
-        linears = []
-        couplings = []
-        for i in range(self.n_layers):
-            actnorms.append(ActNorm(dims))
-            linears.append(InvertibleConv1x1(dims[0]))
-            couplings.append(AffineCoupling(dims, odd=i % 2 != 0))
+        layers = []
+        if datatype == 'image':
+            # for image
+            layers.append(Logit(eps=0.01))
 
-        self.in_act_fn = in_act_fn() if in_act_fn is not None else Identity()
-        self.actnorms = nn.ModuleList(actnorms)
-        self.linears = nn.ModuleList(linears)
-        self.couplings = nn.ModuleList(couplings)
+            # multi-scale architecture
+            mid_dims = dims
+            for i in range(self.n_layers):
+                layers.append(ActNorm(mid_dims))
+                layers.append(InvertibleConv1x1(mid_dims[0]))
+                layers.append(AffineCoupling(mid_dims, odd=i % 2 != 0))
+
+            mid_dims = (mid_dims[0] * 4, mid_dims[1] // 2, mid_dims[2] // 2)
+            layers.append(Squeeze2d(odd=False))
+            for i in range(self.n_layers):
+                layers.append(ActNorm(mid_dims))
+                layers.append(InvertibleConv1x1(mid_dims[0]))
+                layers.append(AffineCoupling(mid_dims, odd=i % 2 != 0))
+
+            mid_dims = (mid_dims[0] // 4, mid_dims[1] * 2, mid_dims[2] * 2)
+            layers.append(Unsqueeze2d(odd=False))
+            for i in range(self.n_layers):
+                layers.append(ActNorm(mid_dims))
+                layers.append(InvertibleConv1x1(mid_dims[0]))
+                layers.append(AffineCoupling(mid_dims, odd=i % 2 != 0))
+
+        else:
+            # for density samples
+            for i in range(self.n_layers):
+                layers.append(ActNorm(dims))
+                layers.append(InvertibleConv1x1(dims[0]))
+                layers.append(AffineCoupling(dims, odd=i % 2 != 0))
+
+        self.net = Compose(layers)
 
     def forward(self, z):
         log_df_dz = torch.zeros(z.size(0)).type_as(z).to(z.device)
-        z, log_df_dz = self.in_act_fn(z, log_df_dz)
-        for i in range(self.n_layers):
-            # actnorm
-            z, log_df_dz = self.actnorms[i](z, log_df_dz)
-
-            # invertible linear
-            z, log_df_dz = self.linears[i](z, log_df_dz)
-
-            # bijective coupling
-            z, log_df_dz = self.couplings[i](z, log_df_dz)
-
-        return z, log_df_dz
+        return self.net(z, log_df_dz)
 
     def backward(self, z):
         log_df_dz = torch.zeros(z.size(0)).type_as(z).to(z.device)
-        for i in reversed(range(self.n_layers)):
-            # bijective coupling
-            z, log_df_dz = self.couplings[i].backward(z, log_df_dz)
-
-            # invertible linear
-            z, log_df_dz = self.linears[i].backward(z, log_df_dz)
-
-            # actnorm
-            z, log_df_dz = self.actnorms[i].backward(z, log_df_dz)
-
-        z, log_df_dz = self.in_act_fn.backward(z, log_df_dz)
-        return z, log_df_dz
+        return self.net.backward(z, log_df_dz)

@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 # NOTE:
 # weight normalization in Pytorch (i.e., torch.nn.utils.weight_norm)
@@ -15,16 +16,25 @@ from .weight_norm import WeightNorm
 from .spectral_norm import SpectralNorm
 
 
+def log_deriv_sigmoid(x):
+    """ logarithm of sigmoid derivative """
+    return x - 2.0 * F.softplus(x)
+
+
 def deriv_sigmoid(x):
     """ derivative of sigmoid """
-    sigma = torch.sigmoid(x)
-    return sigma * (1.0 - sigma)
+    return torch.exp(log_deriv_sigmoid(x))
+
+
+def log_deriv_logit(x, eps=1.0e-8):
+    """ logarithm of logit derivative """
+    y = torch.logit(torch.clamp(x, eps, 1.0 - eps))
+    return -log_deriv_sigmoid(y)
 
 
 def deriv_logit(x, eps=1.0e-8):
     """ derivative of logit """
-    y = torch.logit(torch.clamp(x, eps, 1.0 - eps))
-    return 1.0 / deriv_sigmoid(y)
+    return torch.exp(log_deriv_logit(x, eps))
 
 
 def deriv_tanh(x):
@@ -39,19 +49,40 @@ def deriv_arctanh(x, eps=1.0e-8):
     return 1.0 / (1.0 - x * x)
 
 
-def mix_log_cdf(x, pi, mu, s):
-    x = x.unsqueeze(1)
-    x = pi * torch.sigmoid((x - mu) * torch.exp(-s))
-    x = torch.sum(x, dim=1)
-    return x
+def logistic_logpdf(x, mu, s):
+    """ logarithm of logistic function """
+    z = (x - mu) * torch.exp(-s)
+    return z - s - 2.0 * F.softplus(z)
 
 
-def deriv_mix_log_cdf(x, pi, mu, s):
+def logistic_logcdf(x, mu, s):
+    """ logarithm of logistic CDF """
+    z = (x - mu) * torch.exp(-s)
+    return F.logsigmoid(z)
+
+
+def mix_logistic_logpdf(x, logpi, mu, s):
+    """
+    logarithm of mixture of logistic PDF
+    ---
+    NOTE: for numerical stability PDF should be computed in
+    logarithmic scale using "logsumexp".
+    """
     x = x.unsqueeze(1)
-    w = torch.exp(-s)
-    x = pi * deriv_sigmoid((x - mu) * w) * w
-    x = torch.sum(x, dim=1)
-    return x
+    logsig = logistic_logpdf(x, mu, s)
+    return torch.logsumexp(logpi + logsig, dim=1)
+
+
+def mix_logistic_logcdf(x, logpi, mu, s):
+    """
+    logarithm of mixture of logistic CDF
+    ---
+    NOTE: for numerical stability PDF should be computed in
+    logarithmic scale using "logsumexp".
+    """
+    x = x.unsqueeze(1)
+    logsig = logistic_logcdf(x, mu, s)
+    return torch.logsumexp(logpi + logsig, dim=1)
 
 
 def weight_norm_wrapper(module, wrap=True):
@@ -72,27 +103,27 @@ class Identity(nn.Module):
     def __init__(self):
         super(Identity, self).__init__()
 
-    def forward(self, x, log_det_jacobians):
-        return x, log_det_jacobians
+    def forward(self, x, log_df_dz):
+        return x, log_df_dz
 
-    def backward(self, x, log_det_jacobians):
-        return x, log_det_jacobians
+    def backward(self, x, log_df_dz):
+        return x, log_df_dz
 
 
 class Sigmoid(nn.Module):
     def __init__(self):
         super(Sigmoid, self).__init__()
 
-    def forward(self, x, log_det_jacobians):
-        log_det = torch.log(deriv_sigmoid(x))
+    def forward(self, x, log_df_dz):
+        log_det = log_deriv_sigmoid(x)
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
-        return torch.sigmoid(x), log_det_jacobians + log_det
+        return torch.sigmoid(x), log_df_dz + log_det
 
-    def backward(self, x, log_det_jacobians):
+    def backward(self, x, log_df_dz):
         x = torch.clamp(x, 1.0e-8, 1.0 - 1.0e-8)
-        log_det = torch.log(deriv_logit(x))
+        log_det = log_deriv_logit(x)
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
-        return torch.logit(x), log_det_jacobians + log_det
+        return torch.logit(x), log_df_dz + log_det
 
 
 class Logit(nn.Module):
@@ -100,61 +131,62 @@ class Logit(nn.Module):
         super(Logit, self).__init__()
         self.eps = eps
 
-    def forward(self, x, log_det_jacobians):
+    def forward(self, x, log_df_dz):
         x = torch.clamp(x, self.eps, 1.0 - self.eps)
-        log_det = torch.log(deriv_logit(x))
+        log_det = log_deriv_logit(x)
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
-        return torch.logit(x), log_det_jacobians + log_det
+        return torch.logit(x), log_df_dz + log_det
 
-    def backward(self, x, log_det_jacobians):
-        log_det = torch.log(deriv_sigmoid(x))
+    def backward(self, x, log_df_dz):
+        log_det = log_deriv_sigmoid(x)
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
-        return torch.sigmoid(x), log_det_jacobians + log_det
+        return torch.sigmoid(x), log_df_dz + log_det
 
 
 class Tanh(nn.Module):
     def __init__(self):
         super(Tanh, self).__init__()
 
-    def forward(self, x, log_det_jacobians):
+    def forward(self, x, log_df_dz):
         log_det = torch.log(deriv_tanh(x))
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
-        return torch.tanh(x), log_det_jacobians + log_det
+        return torch.tanh(x), log_df_dz + log_det
 
-    def backward(self, x, log_det_jacobians):
+    def backward(self, x, log_df_dz):
         log_det = torch.log(deriv_arctanh(x))
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
-        return torch.arctanh(x), log_det_jacobians + log_det
+        return torch.arctanh(x), log_df_dz + log_det
 
 
 class Arctanh(nn.Module):
     def __init__(self):
         super(Arctanh, self).__init__()
 
-    def forward(self, x, log_det_jacobians):
+    def forward(self, x, log_df_dz):
         log_det = torch.sum(torch.log(deriv_arctanh(x)), dim=1)
-        return torch.arctanh(x), log_det_jacobians + log_det
+        return torch.arctanh(x), log_df_dz + log_det
 
-    def backward(self, x, log_det_jacobians):
+    def backward(self, x, log_df_dz):
         log_det = torch.sum(torch.log(deriv_tanh(x)), dim=1)
-        return torch.tanh(x), log_det_jacobians + log_det
+        return torch.tanh(x), log_df_dz + log_det
 
 
 class MixLogCDF(nn.Module):
     def __init__(self):
         super(MixLogCDF, self).__init__()
 
-    def forward(self, x, pi, mu, s, log_det_jacobians):
-        log_det = torch.log(deriv_mix_log_cdf(x, pi, mu, s))
+    def forward(self, x, log_pi, mu, s, log_df_dz):
+        log_det = mix_logistic_logpdf(x, log_pi, mu, s)
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
-        return mix_log_cdf(x, pi, mu, s), log_det_jacobians + log_det
+        logz = mix_logistic_logcdf(x, log_pi, mu, s)
+        return torch.exp(logz), log_df_dz + log_det
 
-    def backward(self, x, pi, mu, s, log_det_jacobians):
+    def backward(self, x, log_pi, mu, s, log_df_dz):
         lo = torch.full_like(x, -1.0e3)
         hi = torch.full_like(x, 1.0e3)
         for _ in range(100):
             mid = (lo + hi) * 0.5
-            val = mix_log_cdf(mid, pi, mu, s)
+            val = torch.exp(mix_logistic_logcdf(mid, log_pi, mu, s))
             lo = torch.where(val < x, mid, lo)
             hi = torch.where(val > x, mid, hi)
 
@@ -162,10 +194,10 @@ class MixLogCDF(nn.Module):
                 break
 
         x = (lo + hi) * 0.5
-        log_det = torch.log(deriv_mix_log_cdf(x, pi, mu, s))
+        log_det = mix_logistic_logpdf(x, log_pi, mu, s)
         log_det = torch.sum(log_det.view(x.size(0), -1), dim=1)
 
-        return x, log_det_jacobians - log_det
+        return x, log_df_dz - log_det
 
 
 class LipSwish(nn.Module):
@@ -176,6 +208,110 @@ class LipSwish(nn.Module):
 
     def forward(self, x):
         return x * torch.sigmoid(self.beta * x) / 1.1
+
+
+class ActNorm(nn.Module):
+    def __init__(self, num_features, eps=1.0e-5):
+        super(ActNorm, self).__init__()
+        self.num_features = num_features
+        self.eps = eps
+
+        self.dimensions = [1] + [1 for _ in num_features]
+        self.dimensions[1] = num_features[0]
+        self.log_scale = nn.Parameter(torch.zeros(self.dimensions), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(self.dimensions), requires_grad=True)
+        self.initialized = False
+
+    def forward(self, z, log_df_dz):
+        if not self.initialized:
+            z_reshape = z.view(z.size(0), self.num_features[0], -1)
+            log_std = torch.log(torch.std(z_reshape, dim=[0, 2]) + self.eps)
+            mean = torch.mean(z_reshape, dim=[0, 2])
+            self.log_scale.data.copy_(log_std.view(self.dimensions))
+            self.bias.data.copy_(mean.view(self.dimensions))
+            self.initialized = True
+
+        z = (z - self.bias) / torch.exp(self.log_scale)
+
+        num_pixels = np.prod(z.size()) // (z.size(0) * z.size(1))
+        log_df_dz -= torch.sum(self.log_scale) * num_pixels
+        return z, log_df_dz
+
+    def backward(self, y, log_df_dz):
+        y = y * torch.exp(self.log_scale) + self.bias
+        num_pixels = np.prod(y.size()) // (y.size(0) * y.size(1))
+        log_df_dz += torch.sum(self.log_scale) * num_pixels
+        return y, log_df_dz
+
+
+class BatchNorm(nn.Module):
+    def __init__(self, num_features, momentum=0.1, eps=1.0e-5):
+        super(BatchNorm, self).__init__()
+
+        self.eps = eps
+        self.momentum = momentum
+
+        log_gamma = nn.Parameter(torch.zeros(num_features))
+        beta = nn.Parameter(torch.zeros(num_features))
+        self.register_parameter('log_gamma', log_gamma)
+        self.register_parameter('beta', beta)
+
+        self.register_buffer('running_mean', torch.zeros(num_features))
+        self.register_buffer('running_var', torch.ones(num_features))
+        self.register_buffer('batch_mean', torch.zeros(num_features))
+        self.register_buffer('batch_var', torch.ones(num_features))
+
+    def forward(self, x, log_det_jacob):
+        if self.training:
+            self.batch_mean.data_ = x.mean(0)
+            self.batch_var.data_ = (x - self.batch_mean).pow(2).mean(0) + self.eps
+
+            self.running_mean.mul_(1.0 - self.momentum)
+            self.running_var.mul_(1.0 - self.momentum)
+            self.running_mean.add_(self.batch_mean.detach() * self.momentum)
+            self.running_var.add_(self.batch_var.detach() * self.momentum)
+
+            mean, var = self.batch_mean, self.batch_var
+        else:
+            mean, var = self.running_mean, self.running_var
+
+        x = (x - mean) / torch.sqrt(var)
+        x = x * torch.exp(self.log_gamma) + self.beta
+        log_det = self.log_gamma - 0.5 * torch.log(var)
+        log_det_jacob += torch.sum(log_det)
+
+        return x, log_det_jacob
+
+    def backward(self, x, log_det_jacob):
+        if self.training:
+            mean, var = self.batch_mean, self.batch_var
+        else:
+            mean, var = self.running_mean, self.running_var
+
+        x = (x - self.beta) / torch.exp(self.log_gamma)
+        x = x * torch.sqrt(var) + mean
+
+        log_det = -self.log_gamma + 0.5 * torch.log(var)
+        log_det_jacob += torch.sum(log_det)
+
+        return x, log_det_jacob
+
+
+class Compose(nn.Module):
+    """ compose flow layers """
+    def __init__(self, layers):
+        super(Compose, self).__init__()
+        self.layers = nn.ModuleList(layers)
+
+    def forward(self, z, log_df_dz):
+        for layer in self.layers:
+            z, log_df_dz = layer(z, log_df_dz)
+        return z, log_df_dz
+
+    def backward(self, z, log_df_dz):
+        for layer in reversed(self.layers):
+            z, log_df_dz = layer.backward(z, log_df_dz)
+        return z, log_df_dz
 
 
 class ResBlock1d(nn.Module):
@@ -212,7 +348,7 @@ class ResBlock2d(nn.Module):
             weight_norm_wrapper(nn.Conv2d(in_channels, out_channels, 3, 1, 1), weight_norm),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            weight_norm_wrapper(nn.Conv2d(in_channels, out_channels, 3, 1, 1), weight_norm),
+            weight_norm_wrapper(nn.Conv2d(out_channels, out_channels, 3, 1, 1), weight_norm),
         )
         self.out = nn.Sequential(
             nn.BatchNorm2d(out_channels),
@@ -280,88 +416,82 @@ class ConvNet(nn.Module):
         return self.out_block(x)
 
 
-class ActNorm(nn.Module):
-    def __init__(self, num_features, eps=1.0e-5):
-        super(ActNorm, self).__init__()
-        self.num_features = num_features
-        self.eps = eps
+class GatedLinear(nn.Module):
+    def __init__(self, in_features, out_features):
+        super(GatedLinear, self).__init__()
+        self.op = nn.Linear(in_features * 2, out_features)
 
-        self.dimensions = [1] + [1 for _ in num_features]
-        self.dimensions[1] = num_features[0]
-        self.log_scale = nn.Parameter(torch.zeros(self.dimensions), requires_grad=True)
-        self.bias = nn.Parameter(torch.zeros(self.dimensions), requires_grad=True)
-        self.initialized = False
-
-    def forward(self, z, log_det_jacobians):
-        if not self.initialized:
-            z_reshape = z.view(z.size(0), self.num_features[0], -1)
-            log_std = torch.log(torch.std(z_reshape, dim=[0, 2]) + self.eps)
-            mean = torch.mean(z_reshape, dim=[0, 2])
-            self.log_scale.data.copy_(log_std.view(self.dimensions))
-            self.bias.data.copy_(mean.view(self.dimensions))
-            self.initialized = True
-
-        z = (z - self.bias) / torch.exp(self.log_scale)
-
-        num_pixels = np.prod(z.size()) // (z.size(0) * z.size(1))
-        log_det_jacobians -= torch.sum(self.log_scale) * num_pixels
-        return z, log_det_jacobians
-
-    def backward(self, y, log_det_jacobians):
-        y = y * torch.exp(self.log_scale) + self.bias
-        num_pixels = np.prod(y.size()) // (y.size(0) * y.size(1))
-        log_det_jacobians += torch.sum(self.log_scale) * num_pixels
-        return y, log_det_jacobians
+    def forward(self, x):
+        C = x.size(1)
+        # non-linear
+        y = F.elu(torch.cat([x, -x], dim=1))
+        # linear
+        y = self.op(y)
+        # non-linear
+        y = F.elu(torch.cat([y, -y], dim=1))
+        # gate
+        y, a = torch.split(y, C, dim=1)
+        y = y * torch.sigmoid(a)
+        return x + y
 
 
-class BatchNorm(nn.Module):
-    def __init__(self, num_features, momentum=0.1, eps=1.0e-5):
-        super(BatchNorm, self).__init__()
+class GatedConv2d(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(GatedConv2d, self).__init__()
+        self.op = nn.Conv2d(in_channels * 2, out_channels, 3, 1, 1)
 
-        self.eps = eps
-        self.momentum = momentum
+    def forward(self, x):
+        C = x.size(1)
+        # non-linear
+        y = F.elu(torch.cat([x, -x], dim=1))
+        # conv
+        y = self.op(y)
+        # non-linear
+        y = F.elu(torch.cat([y, -y], dim=1))
+        # gate
+        y, a = torch.split(y, C, dim=1)
+        y = y * torch.sigmoid(a)
+        return x + y
 
-        log_gamma = nn.Parameter(torch.zeros(num_features))
-        beta = nn.Parameter(torch.zeros(num_features))
-        self.register_parameter('log_gamma', log_gamma)
-        self.register_parameter('beta', beta)
 
-        self.register_buffer('running_mean', torch.zeros(num_features))
-        self.register_buffer('running_var', torch.ones(num_features))
-        self.register_buffer('batch_mean', torch.zeros(num_features))
-        self.register_buffer('batch_var', torch.ones(num_features))
+class GatedAttn(nn.Module):
+    def __init__(self, in_out_shape, filters=32, heads=4):
+        super(GatedAttn, self).__init__()
+        assert filters % heads == 0
 
-    def forward(self, x, log_det_jacob):
-        if self.training:
-            self.batch_mean.data_ = x.mean(0)
-            self.batch_var.data_ = (x - self.batch_mean).pow(2).mean(0) + self.eps
+        self.channels = in_out_shape[0]
+        self.filters = filters
+        self.heads = heads
+        self.conv1 = nn.Conv1d(self.channels, filters * 3, 1, 1, 0)
+        self.conv2 = nn.Conv1d(filters, self.channels * 2, 1, 1, 0)
 
-            self.running_mean.mul_(1.0 - self.momentum)
-            self.running_var.mul_(1.0 - self.momentum)
-            self.running_mean.add_(self.batch_mean.detach() * self.momentum)
-            self.running_var.add_(self.batch_var.detach() * self.momentum)
+        # NOTE: adding noises for positional encoding,
+        # which is introduced in the following paper.
+        # Gehring+ 2017, "Convolutional Sequence to Sequence Learning"
+        # https://arxiv.org/abs/1705.03122
+        pos_emb = nn.Parameter(torch.randn(1, *in_out_shape) * 0.01)
+        self.register_parameter('pos_emb', pos_emb)
 
-            mean, var = self.batch_mean, self.batch_var
-        else:
-            mean, var = self.running_mean, self.running_var
+    def forward(self, x):
+        org_shape = x.size()
+        B = org_shape[0]
+        C = org_shape[1]
+        D = self.filters // self.heads
+        assert C == self.channels
 
-        x = (x - mean) / torch.sqrt(var)
-        x = x * torch.exp(self.log_gamma) + self.beta
-        log_det = self.log_gamma - 0.5 * torch.log(var)
-        log_det_jacob += torch.sum(log_det)
+        # attention
+        x_reshape = (x + self.pos_emb).view(B, C, -1)
+        params = self.conv1(x_reshape).view(B, 3 * self.heads, D, -1)  # (B, 3head, D, *)
+        V, K, Q = torch.split(params, self.heads, dim=1)  # (B, head, D, *)
+        W = torch.matmul(V.permute(0, 1, 3, 2), K) / np.sqrt(D)  # (B, head, *, *)
+        W = F.softmax(W, dim=2)
+        A = torch.matmul(Q, W)  # (B, head, D, *)
+        A = A.view(B, C, -1)
 
-        return x, log_det_jacob
+        # gate
+        y = self.conv2(A)
+        y, a = torch.split(y, C, dim=1)
+        y = y * torch.sigmoid(a)
+        y = y.view(org_shape)
 
-    def backward(self, x, log_det_jacob):
-        if self.training:
-            mean, var = self.batch_mean, self.batch_var
-        else:
-            mean, var = self.running_mean, self.running_var
-
-        x = (x - self.beta) / torch.exp(self.log_gamma)
-        x = x * torch.sqrt(var) + mean
-
-        log_det = -self.log_gamma + 0.5 * torch.log(var)
-        log_det_jacob += torch.sum(log_det)
-
-        return x, log_det_jacob
+        return x + y

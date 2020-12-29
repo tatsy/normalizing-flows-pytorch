@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 
 
 def safe_detach(x):
@@ -8,6 +9,20 @@ def safe_detach(x):
     https://github.com/rtqichen/residual-flows/blob/master/lib/layers/iresblock.py
     """
     return x.detach().requires_grad_(x.requires_grad)
+
+
+def weights_init_as_nearly_identity(m):
+    """
+    initialize weights such that the layer becomes nearly identity mapping
+    """
+    classname = m.__class__.__name__
+    if classname.find('Linear') != -1 or classname.find('Conv') != -1:
+        # check if module is wrapped by spectral norm
+        if hasattr(m, 'weight'):
+            nn.init.constant_(m.weight, 0)
+        else:
+            nn.init.constant_(m.weight_bar, 0)
+        nn.init.normal_(m.bias, 0, 0.01)
 
 
 def anomaly_hook(self, inputs, outputs):

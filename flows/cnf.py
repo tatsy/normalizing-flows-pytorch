@@ -3,15 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .misc import weights_init_as_nearly_identity
 from .odeint import odeint, odeint_adjoint
 from .jacobian import trace_df_dz
-
-
-def _weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Linear') != -1 or classname.find('Conv') != -1:
-        nn.init.constant_(m.weight, 0)
-        nn.init.normal_(m.bias, 0, 0.01)
 
 
 class HyperNetwork(nn.Module):
@@ -40,7 +34,7 @@ class HyperLinear(nn.Module):
 
         self.n_out_params = np.prod(self.weight_shape) + np.prod(self.bias_shape)
         self.hyper_net = HyperNetwork(1, self.n_out_params)
-        self.hyper_net.apply(_weights_init)
+        self.hyper_net.apply(weights_init_as_nearly_identity)
 
     def forward(self, t, x):
         params = self.hyper_net(t)
@@ -70,7 +64,7 @@ class HyperConv2d(nn.Module):
 
         self.n_out_params = np.prod(self.weight_shape) + np.prod(self.bias_shape)
         self.hyper_net = HyperNetwork(1, self.n_out_params)
-        self.hyper_net.apply(_weights_init)
+        self.hyper_net.apply(weights_init_as_nearly_identity)
 
     def forward(self, t, x):
         params = self.hyper_net(t)
