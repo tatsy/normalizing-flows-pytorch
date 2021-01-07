@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-from flows import Glow, Ffjord, Flowpp, RealNVP, ResFlow
+from flows import Glow, Ffjord, Flowpp, RealNVP, ResFlow, PlanarFlow
 from flows.misc import anomaly_hook
 from common.utils import image_plot, save_image, scatter_plot
 from flows.dataset import FlowDataLoader
@@ -17,6 +17,7 @@ from flows.modules import Logit, Identity
 from common.logging import Logging
 
 networks = {
+    'planar': PlanarFlow,
     'realnvp': RealNVP,
     'glow': Glow,
     'flow++': Flowpp,
@@ -71,6 +72,7 @@ class Model(object):
 
     def train_on_batch(self, y):
         y = y.to(self.device)
+        y = y.contiguous()
 
         z, log_det_jacobian = self.net(y)
         z = z.view(y.size(0), -1)
@@ -142,6 +144,18 @@ class Model(object):
 
         # testing
         if dtype == '2d':
+            # plot data samples
+            xs = y_data[:, 0].cpu().numpy()
+            ys = y_data[:, 1].cpu().numpy()
+            y_image = scatter_plot(xs, ys, title=title)
+            writer.add_image('2d/data/y', y_image, step, dataformats='HWC')
+
+            if save_image:
+                out_file = 'y_data_{:06d}.jpg'.format(step)
+                save_image(out_file, y_image)
+                latest_file = 'y_data_latest.jpg'
+                shutil.copyfile(out_file, latest_file)
+
             # plot latent samples
             z, _ = self.net(y_data)
             pz = self.pz(z)
@@ -154,7 +168,7 @@ class Model(object):
             writer.add_image('2d/train/z', z_image, step, dataformats='HWC')
 
             if save_image:
-                out_file = 'z_sample_{:06d}.jpg'
+                out_file = 'z_sample_{:06d}.jpg'.format(step)
                 save_image(out_file, z_image)
                 latest_file = 'z_sample_latest.jpg'
                 shutil.copyfile(out_file, latest_file)
@@ -236,13 +250,26 @@ class Model(object):
                 shutil.copyfile(out_file, latest_file)
 
         if dtype == 'image':
-            y, _ = self.sample_y(max(100, n_samples))
-            y = y.detach().cpu().numpy()
-            images = torch.from_numpy(y[:100])
-            images = torch.clamp(images, 0.0, 1.0)
-            grid_image = torchvision.utils.make_grid(images, nrow=10, pad_value=1)
+            # plot data samples
+            images = torch.clamp(y_data.detach().cpu(), 0.0, 1.0)
+            grid_image = torchvision.utils.make_grid(images, nrow=8, pad_value=1)
             grid_image = grid_image.permute(1, 2, 0).numpy()
-            writer.add_image('image/test/grid', grid_image, step, dataformats='HWC')
+            writer.add_image('image/test/data', grid_image, step, dataformats='HWC')
+
+            if save_image:
+                out_file = 'y_data_{:06d}.jpg'.format(step)
+                save_image(out_file, grid_image)
+                latest_file = 'y_data_latest.jpg'
+                shutil.copyfile(out_file, latest_file)
+
+            # sample with generative flow
+            y, _ = self.sample_y(max(64, n_samples))
+            y = y.detach().cpu().numpy()
+            images = torch.from_numpy(y[:64])
+            images = torch.clamp(images, 0.0, 1.0)
+            grid_image = torchvision.utils.make_grid(images, nrow=8, pad_value=1)
+            grid_image = grid_image.permute(1, 2, 0).numpy()
+            writer.add_image('image/test/sample', grid_image, step, dataformats='HWC')
 
             if save_image:
                 out_file = 'y_image_{:06d}.jpg'.format(step)
@@ -285,7 +312,7 @@ def main(cfg):
     # resume from checkpoint
     start_step = 0
     if cfg.run.ckpt_path is not None:
-        start_step = model.load_ckpt(cfg.run.ckpt_path) + 1
+        start_step = model.load_ckpt(cfg.run.ckpt_path)
 
     # training
     step = start_step
@@ -297,24 +324,25 @@ def main(cfg):
         z, loss = model.train_on_batch(y)
         elapsed_time = time.perf_counter() - start_time
 
-        if step % (cfg.run.display * 10) == 0:
+        # update for the next step
+        step += 1
+
+        # reports
+        if step == start_step + 1 or step % (cfg.run.display * 10) == 0:
             # logging
             logger.info('[%d/%d] loss=%.5f [%.3f s/it]' %
                         (step, cfg.train.steps, loss.item(), elapsed_time))
 
-        if step % (cfg.run.display * 100) == 0:
+        if step == start_step + 1 or step % (cfg.run.display * 100) == 0:
             writer.add_scalar('{:s}/train/loss'.format(dataset.dtype), loss.item(), step)
             save_files = step % (cfg.run.display * 1000) == 0
             model.report(writer, y, step=step, save_files=save_files)
             writer.flush()
 
-        if step % (cfg.run.display * 1000) == 0:
+        if step == start_step + 1 or step % (cfg.run.display * 1000) == 0:
             # save ckpt
             ckpt_file = 'latest.pth'
             model.save_ckpt(step, ckpt_file)
-
-        # update for the next step
-        step += 1
 
 
 if __name__ == '__main__':

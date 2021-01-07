@@ -43,6 +43,18 @@ def deriv_tanh(x):
     return 1.0 - y * y
 
 
+def log_cosh(x):
+    """ numerically stable log cosh(x) """
+    s = torch.abs(x)
+    p = torch.exp(-2.0 * s)
+    return s + torch.log1p(p) - np.log(2.0)
+
+
+def log_deriv_tanh(x):
+    """ logarithm of derivative of tanh """
+    return -2.0 * log_cosh(x)
+
+
 def deriv_arctanh(x, eps=1.0e-8):
     """ derivative of arctanh """
     x = torch.clamp(x, -1.0 + eps, 1.0 - eps)
@@ -218,8 +230,8 @@ class ActNorm(nn.Module):
 
         self.dimensions = [1] + [1 for _ in num_features]
         self.dimensions[1] = num_features[0]
-        self.log_scale = nn.Parameter(torch.zeros(self.dimensions), requires_grad=True)
-        self.bias = nn.Parameter(torch.zeros(self.dimensions), requires_grad=True)
+        self.register_parameter('log_scale', nn.Parameter(torch.zeros(self.dimensions)))
+        self.register_parameter('bias', nn.Parameter(torch.zeros(self.dimensions)))
         self.initialized = False
 
     def forward(self, z, log_df_dz):
@@ -245,26 +257,36 @@ class ActNorm(nn.Module):
 
 
 class BatchNorm(nn.Module):
-    def __init__(self, num_features, momentum=0.1, eps=1.0e-5):
+    def __init__(self, num_features, momentum=0.1, eps=1.0e-5, affine=True):
         super(BatchNorm, self).__init__()
 
+        self.num_features = num_features
         self.eps = eps
         self.momentum = momentum
 
-        log_gamma = nn.Parameter(torch.zeros(num_features))
-        beta = nn.Parameter(torch.zeros(num_features))
-        self.register_parameter('log_gamma', log_gamma)
-        self.register_parameter('beta', beta)
+        self.dimensions = [1] + [1 for _ in num_features]
+        self.dimensions[1] = num_features[0]
+        log_gamma = torch.zeros(self.dimensions)
+        beta = torch.zeros(self.dimensions)
+        if affine:
+            self.register_parameter('log_gamma', nn.Parameter(log_gamma))
+            self.register_parameter('beta', nn.Parameter(beta))
+        else:
+            self.register_buffer('log_gamma', log_gamma)
+            self.register_buffer('beta', beta)
 
-        self.register_buffer('running_mean', torch.zeros(num_features))
-        self.register_buffer('running_var', torch.ones(num_features))
-        self.register_buffer('batch_mean', torch.zeros(num_features))
-        self.register_buffer('batch_var', torch.ones(num_features))
+        self.register_buffer('running_mean', torch.zeros(self.dimensions))
+        self.register_buffer('running_var', torch.ones(self.dimensions))
+        self.register_buffer('batch_mean', torch.zeros(self.dimensions))
+        self.register_buffer('batch_var', torch.ones(self.dimensions))
 
     def forward(self, x, log_det_jacob):
         if self.training:
-            self.batch_mean.data_ = x.mean(0)
-            self.batch_var.data_ = (x - self.batch_mean).pow(2).mean(0) + self.eps
+            x_reshape = x.view(x.size(0), self.num_features[0], -1)
+            x_mean = torch.mean(x_reshape, dim=[0, 2], keepdim=True)
+            x_var = torch.mean((x_reshape - x_mean).pow(2), dim=[0, 2], keepdim=True) + self.eps
+            self.batch_mean.data.copy_(x_mean.view(self.dimensions))
+            self.batch_var.data.copy_(x_var.view(self.dimensions))
 
             self.running_mean.mul_(1.0 - self.momentum)
             self.running_var.mul_(1.0 - self.momentum)
@@ -277,8 +299,10 @@ class BatchNorm(nn.Module):
 
         x = (x - mean) / torch.sqrt(var)
         x = x * torch.exp(self.log_gamma) + self.beta
+
+        num_pixels = np.prod(x.size()) // (x.size(0) * x.size(1))
         log_det = self.log_gamma - 0.5 * torch.log(var)
-        log_det_jacob += torch.sum(log_det)
+        log_det_jacob += torch.sum(log_det) * num_pixels
 
         return x, log_det_jacob
 
@@ -291,8 +315,9 @@ class BatchNorm(nn.Module):
         x = (x - self.beta) / torch.exp(self.log_gamma)
         x = x * torch.sqrt(var) + mean
 
+        num_pixels = np.prod(x.size()) // (x.size(0) * x.size(1))
         log_det = -self.log_gamma + 0.5 * torch.log(var)
-        log_det_jacob += torch.sum(log_det)
+        log_det_jacob += torch.sum(log_det) * num_pixels
 
         return x, log_det_jacob
 
@@ -314,19 +339,17 @@ class Compose(nn.Module):
         return z, log_df_dz
 
 
-class ResBlock1d(nn.Module):
+class ResBlockLinear(nn.Module):
     def __init__(self, in_channels, out_channels, weight_norm=True):
-        super(ResBlock1d, self).__init__()
+        super(ResBlockLinear, self).__init__()
 
         self.net = nn.Sequential(
+            nn.BatchNorm1d(in_channels),
+            nn.ReLU(inplace=True),
             weight_norm_wrapper(nn.Linear(in_channels, out_channels), weight_norm),
             nn.BatchNorm1d(out_channels),
             nn.ReLU(inplace=True),
             weight_norm_wrapper(nn.Linear(out_channels, out_channels), weight_norm),
-        )
-        self.out = nn.Sequential(
-            nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True),
         )
 
         if in_channels != out_channels:
@@ -337,22 +360,20 @@ class ResBlock1d(nn.Module):
     def forward(self, x):
         y = self.net(x)
         x = self.bridge(x)
-        return self.out(x + y)
+        return x + y
 
 
 class ResBlock2d(nn.Module):
-    def __init__(self, in_channels, out_channels, weight_norm):
+    def __init__(self, in_channels, out_channels, weight_norm=True):
         super(ResBlock2d, self).__init__()
 
         self.net = nn.Sequential(
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
             weight_norm_wrapper(nn.Conv2d(in_channels, out_channels, 3, 1, 1), weight_norm),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             weight_norm_wrapper(nn.Conv2d(out_channels, out_channels, 3, 1, 1), weight_norm),
-        )
-        self.out = nn.Sequential(
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
         )
 
         if in_channels != out_channels:
@@ -364,7 +385,7 @@ class ResBlock2d(nn.Module):
     def forward(self, x):
         y = self.net(x)
         x = self.bridge(x)
-        return self.out(x + y)
+        return x + y
 
 
 class MLP(nn.Module):
@@ -373,17 +394,18 @@ class MLP(nn.Module):
 
         self.in_block = nn.Sequential(
             weight_norm_wrapper(nn.Linear(in_channels, base_filters), weight_norm),
-            nn.BatchNorm1d(base_filters),
-            nn.ReLU(inplace=True),
         )
 
         res_blocks = []
         for _ in range(n_blocks):
-            res_blocks.append(ResBlock1d(base_filters, base_filters, weight_norm))
-
+            res_blocks.append(ResBlockLinear(base_filters, base_filters, weight_norm))
         self.mid_block = nn.Sequential(*res_blocks)
 
-        self.out_block = weight_norm_wrapper(nn.Linear(base_filters, out_channels), weight_norm)
+        self.out_block = nn.Sequential(
+            nn.BatchNorm1d(base_filters),
+            nn.ReLU(inplace=True),
+            weight_norm_wrapper(nn.Linear(base_filters, out_channels), weight_norm),
+        )
 
     def forward(self, x):
         x = self.in_block(x)
@@ -397,18 +419,18 @@ class ConvNet(nn.Module):
 
         self.in_block = nn.Sequential(
             weight_norm_wrapper(nn.Conv2d(in_channels, base_filters, 3, 1, 1), weight_norm),
-            nn.BatchNorm2d(base_filters),
-            nn.ReLU(inplace=True),
         )
 
         res_blocks = []
         for i in range(n_blocks):
             res_blocks.append(ResBlock2d(base_filters, base_filters, weight_norm))
-
         self.mid_block = nn.Sequential(*res_blocks)
 
-        self.out_block = weight_norm_wrapper(nn.Conv2d(base_filters, out_channels, 3, 1, 1),
-                                             weight_norm)
+        self.out_block = nn.Sequential(
+            nn.BatchNorm2d(base_filters),
+            nn.ReLU(inplace=True),
+            weight_norm_wrapper(nn.Conv2d(base_filters, out_channels, 1, 1, 0), weight_norm),
+        )
 
     def forward(self, x):
         x = self.in_block(x)
@@ -455,7 +477,7 @@ class GatedConv2d(nn.Module):
 
 
 class GatedAttn(nn.Module):
-    def __init__(self, in_out_shape, filters=32, heads=4):
+    def __init__(self, in_out_shape, filters=8, heads=4):
         super(GatedAttn, self).__init__()
         assert filters % heads == 0
 

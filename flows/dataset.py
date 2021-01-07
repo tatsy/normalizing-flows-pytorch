@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torchvision
 import sklearn.datasets
+from torchvision import transforms
 
 N_DATASET_SIZE = 65536
 
@@ -66,8 +67,9 @@ class FlowDataLoader(object):
         if self.name == 'mnist':
             self.dset = torchvision.datasets.MNIST(root=os.path.join(data_root, 'mnist'),
                                                    train=True,
-                                                   download=True)
-            self.dims = (1, 28, 28)
+                                                   download=True,
+                                                   transform=transforms.Pad((2, 2)))
+            self.dims = (1, 32, 32)
             self.dtype = 'image'
         elif self.name == 'cifar10':
             self.dset = torchvision.datasets.CIFAR10(root=os.path.join(data_root, 'cifar10'),

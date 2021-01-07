@@ -2,6 +2,54 @@ import torch
 import torch.nn as nn
 
 
+def channel_split(z, dim=1, odd=False):
+    C = z.size(dim)
+    z0, z1 = torch.split(z, C // 2, dim=dim)
+    if odd:
+        z0, z1 = z1, z0
+    return z0, z1
+
+
+def channel_merge(z0, z1, dim=1, odd=False):
+    if odd:
+        z0, z1 = z1, z0
+    z = torch.cat([z0, z1], dim=dim)
+    return z
+
+
+def get_checker_mask(H, W, odd=False, device=None):
+    ix = torch.arange(W).to(device).long()
+    iy = torch.arange(H).to(device).long()
+    iy, ix = torch.meshgrid([iy, ix])
+
+    mod = 0 if odd else 1
+    mask = ((ix + iy) % 2 == mod).float()
+    mask = mask.view(1, 1, H, W)
+
+    return mask
+
+
+def checker_split(z, odd=False):
+    assert z.dim() == 4
+
+    _, _, H, W = z.size()
+    mask = get_checker_mask(H, W, odd)
+
+    z0 = z * mask
+    z1 = z * (1.0 - mask)
+    return z0, z1
+
+
+def checker_merge(z0, z1, odd=False):
+    assert z0.dim() == 4 and z1.dim() == 4
+
+    _, _, H, W = z0.size()
+    mask = get_checker_mask(H, W, odd)
+
+    z = z0 * mask + z1 * (1.0 - mask)
+    return z
+
+
 def squeeze1d(z, odd=False):
     assert z.dim() == 2
     B, C = z.size()
@@ -20,7 +68,7 @@ def unsqueeze1d(z0, z1, odd=False):
     if odd:
         z0, z1 = z1, z0
     z = torch.stack([z0, z1], dim=-1)
-    z = z.view(B, -1)
+    z = z.view(B, -1).contiguous()
     return z
 
 
@@ -28,11 +76,10 @@ def squeeze2d(z, odd=False):
     assert z.dim() == 4
     B, C, H, W = z.size()
 
-    z = z.unfold(2, 2, 2).unfold(3, 2, 2).contiguous()  # (B, C, sH, sW, 2, 2)
-    z = z.view(B, C, H // 2, W // 2, 4)
-    za, zb, zc, zd = torch.split(z, 1, dim=4)
-    z0 = torch.cat([za, zd], dim=1).squeeze(-1)
-    z1 = torch.cat([zb, zc], dim=1).squeeze(-1)
+    z = z.view(B, C, H // 2, 2, W // 2, 2)  # (B, C, sH, 2, sW, 2)
+    z = z.permute(0, 1, 3, 5, 2, 4).contiguous()  # (B, C, 2, 2, sH, sW)
+    z = z.view(B, C * 4, H // 2, W // 2)  # (B, C * 4, sH, sW)
+    z0, z1 = torch.split(z, C * 2, dim=1)
     if odd:
         z0, z1 = z1, z0
     return z0, z1
@@ -45,10 +92,10 @@ def unsqueeze2d(z0, z1, odd=False):
 
     if odd:
         z0, z1 = z1, z0
-    za, zd = torch.split(z0, C, dim=1)
-    zb, zc = torch.split(z1, C, dim=1)
-    z = torch.stack([za, zb, zc, zd], dim=-1)  # (B, C, sH, sW, 4)
-    z = z.view(B, C, sH, sW, 2, 2).permute(0, 1, 2, 4, 3, 5).contiguous()
+
+    z = torch.cat([z0, z1], dim=1)
+
+    z = z.view(B, C, 2, 2, sH, sW).permute(0, 1, 4, 2, 5, 3).contiguous()
     z = z.view(B, C, sH * 2, sW * 2)
     return z
 

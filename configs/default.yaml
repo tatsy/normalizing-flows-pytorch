@@ -13,8 +13,8 @@ train:
 optimizer:
   name: adam
   lr: 3.0e-4
-  beta1: 0.5
-  beta2: 0.9
+  beta1: 0.9
+  beta2: 0.999
   weight_decay: 0.0
 
 run:

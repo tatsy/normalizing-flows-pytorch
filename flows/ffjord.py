@@ -23,7 +23,7 @@ class Ffjord(nn.Module):
         layers = []
         if datatype == 'image':
             # for image
-            NotImplementedError('Sorry, residual flow for image generation is not supported!')
+            NotImplementedError('Sorry, FFJORD for image generation is not supported!')
         else:
             # for density samples
             for i in range(self.n_layers):

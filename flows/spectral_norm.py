@@ -33,16 +33,14 @@ class SpectralNorm(nn.Module):
             v.data = l2normalize(torch.mv(torch.t(w.view(height, -1).data), u.data))
             u.data = l2normalize(torch.mv(w.view(height, -1).data, v.data))
 
-        # sigma = torch.dot(u.data, torch.mv(w.view(height,-1).data, v.data))
         sigma = u.dot(w.view(height, -1).mv(v))
-        scale = self.coeff / (sigma.item() + self.eps)
+        scale = self.coeff / (sigma + self.eps)
 
+        delattr(self.module, self.name)
         if scale < 1.0:
-            # setattr(self.module, self.name, Parameter(w.data * scale, requires_grad=False))
-            self.module.register_buffer(self.name, w.data * scale)
+            setattr(self.module, self.name, w * scale.expand_as(w))
         else:
-            # setattr(self.module, self.name, w)
-            self.module.register_buffer(self.name, w.data)
+            setattr(self.module, self.name, w)
 
     def _made_params(self):
         try:
@@ -63,13 +61,11 @@ class SpectralNorm(nn.Module):
         v = w.data.new(width).normal_(0, 1)
         u.data = l2normalize(u.data)
         v.data = l2normalize(v.data)
-        w_bar = w.data
-
-        del self.module._parameters[self.name]
+        w_bar = nn.Parameter(w.data)
 
         self.module.register_buffer(self.name + '_u', u)
         self.module.register_buffer(self.name + '_v', v)
-        self.module.register_buffer(self.name + '_bar', w_bar)
+        self.module.register_parameter(self.name + '_bar', w_bar)
 
     def forward(self, *args):
         self._update_u_v()

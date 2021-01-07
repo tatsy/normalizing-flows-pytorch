@@ -58,6 +58,7 @@ class InvertibleConv1x1(nn.Module):
             y_reshape = y.view(y.size(0), y.size(1), -1)
             y_reshape = torch.lu_solve(y_reshape, LU.unsqueeze(0), self.pivots.unsqueeze(0))
             y = y_reshape.view(y.size())
+            y = y.contiguous()
 
         num_pixels = np.prod(y.size()) // (y.size(0) * y.size(1))
         log_df_dz -= torch.sum(self.log_s, dim=0) * num_pixels
@@ -79,24 +80,45 @@ class Glow(nn.Module):
 
             # multi-scale architecture
             mid_dims = dims
-            for i in range(self.n_layers):
-                layers.append(ActNorm(mid_dims))
-                layers.append(InvertibleConv1x1(mid_dims[0]))
-                layers.append(AffineCoupling(mid_dims, odd=i % 2 != 0))
+            while max(mid_dims[1], mid_dims[2]) > 8:
+                # checkerboard masking
+                for i in range(self.n_layers):
+                    layers.append(ActNorm(mid_dims))
+                    layers.append(InvertibleConv1x1(mid_dims[0]))
+                    layers.append(AffineCoupling(mid_dims, masking='checkerboard', odd=i % 2 != 0))
 
-            mid_dims = (mid_dims[0] * 4, mid_dims[1] // 2, mid_dims[2] // 2)
-            layers.append(Squeeze2d(odd=False))
-            for i in range(self.n_layers):
-                layers.append(ActNorm(mid_dims))
-                layers.append(InvertibleConv1x1(mid_dims[0]))
-                layers.append(AffineCoupling(mid_dims, odd=i % 2 != 0))
+                # squeeze
+                layers.append(Squeeze2d(odd=False))
+                mid_dims = (mid_dims[0] * 4, mid_dims[1] // 2, mid_dims[2] // 2)
 
-            mid_dims = (mid_dims[0] // 4, mid_dims[1] * 2, mid_dims[2] * 2)
-            layers.append(Unsqueeze2d(odd=False))
-            for i in range(self.n_layers):
+                # channel-wise masking
+                for i in range(self.n_layers):
+                    layers.append(ActNorm(mid_dims))
+                    layers.append(InvertibleConv1x1(mid_dims[0]))
+                    layers.append(AffineCoupling(mid_dims, masking='channelwise', odd=i % 2 != 0))
+
+            # checkerboard masking (lowest resolution)
+            for i in range(self.n_layers + 1):
                 layers.append(ActNorm(mid_dims))
                 layers.append(InvertibleConv1x1(mid_dims[0]))
-                layers.append(AffineCoupling(mid_dims, odd=i % 2 != 0))
+                layers.append(AffineCoupling(mid_dims, masking='checkerboard', odd=i % 2 != 0))
+
+            while mid_dims[1] != dims[1] or mid_dims[2] != dims[2]:
+                # channel-wise masking
+                # for i in range(self.n_layers):
+                #     layers.append(ActNorm(mid_dims))
+                #     layers.append(InvertibleConv1x1(mid_dims[0]))
+                #     layers.append(AffineCoupling(mid_dims, masking='channelwise', odd=i % 2 != 0))
+
+                # unsqueeze
+                layers.append(Unsqueeze2d(odd=False))
+                mid_dims = (mid_dims[0] // 4, mid_dims[1] * 2, mid_dims[2] * 2)
+
+                # checkerboard masking
+                # for i in range(self.n_layers):
+                #     layers.append(ActNorm(mid_dims))
+                #     layers.append(InvertibleConv1x1(mid_dims[0]))
+                #     layers.append(AffineCoupling(mid_dims, masking='checkerboard', odd=i % 2 != 0))
 
         else:
             # for density samples
