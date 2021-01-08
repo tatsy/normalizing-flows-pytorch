@@ -64,6 +64,10 @@ class Model(object):
         else:
             raise Exception('optimizer "%s" is currently not supported' % (cfg.optimizer.name))
 
+        self.schduler = torch.optim.lr_scheduler.StepLR(self.optim,
+                                                        step_size=cfg.optimizer.decay_steps,
+                                                        gamma=cfg.optimizer.decay_ratio)
+
     def train(self):
         self.net.train()
 
@@ -82,6 +86,7 @@ class Model(object):
         self.optim.zero_grad()
         loss.backward()
         self.optim.step()
+        self.schduler.step()
 
         return z, loss
 

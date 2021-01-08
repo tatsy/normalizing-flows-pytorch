@@ -12,10 +12,12 @@ train:
 
 optimizer:
   name: adam
-  lr: 3.0e-4
+  lr: 1.0e-4
   beta1: 0.9
   beta2: 0.999
   weight_decay: 0.0
+  decay_steps: 10000
+  decay_ratio: 0.5
 
 run:
   gpu: 0

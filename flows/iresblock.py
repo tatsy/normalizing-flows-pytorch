@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 
+from .misc import safe_detach
 from .modules import LipSwish
-from .jacobian import logdet_df_dz, memory_saved_logdet_wrapper
+from .jacobian import (logdet_df_dz, logdet_df_dz_fixed, logdet_df_dz_unbias,
+                       memory_saved_logdet_wrapper)
 from .spectral_norm import SpectralNorm as spectral_norm
 
 activations = {
@@ -17,17 +19,32 @@ class InvertibleResBlockBase(nn.Module):
     """
     invertible residual block
     """
-    def __init__(self, coeff=0.97, ftol=1.0e-4, logdet_estimate_method='unbias'):
+    def __init__(self, coeff=0.97, ftol=1.0e-4, logdet_estimator='unbias'):
         super(InvertibleResBlockBase, self).__init__()
 
         self.coeff = coeff
         self.ftol = ftol
-        self.logdet_fn = lambda g, z, method=logdet_estimate_method: logdet_df_dz(g, z, method)
+        self.estimator = logdet_estimator
         self.proc_g_fn = memory_saved_logdet_wrapper
         self.g_fn = nn.Sequential()
 
+    def prepare_logdet_estimator(self):
+        logdet_fn = None
+        if self.training:
+            logdet_fn = lambda g, z, method=self.estimator: logdet_df_dz(g, z, 1, method=method)
+        else:
+            if self.estimator == 'fixed':
+                logdet_fn = lambda g, z, method=self.estimator: logdet_df_dz_fixed(
+                    g, z, n_samples=8)
+            elif self.estimator == 'unbias':
+                logdet_fn = lambda g, z, method=self.estimator: logdet_df_dz_unbias(
+                    g, z, n_samples=8, n_exact=20, is_training=self.training)
+
+        return logdet_fn
+
     def forward(self, x, log_df_dz):
-        g, logdet = self.proc_g_fn(self.logdet_fn, x, self.g_fn, self.training)
+        logdet_fn = self.prepare_logdet_estimator()
+        g, logdet = self.proc_g_fn(logdet_fn, x, self.g_fn, self.training)
         z = x + g
         log_df_dz += logdet
         return z, log_df_dz
@@ -35,18 +52,21 @@ class InvertibleResBlockBase(nn.Module):
     def backward(self, z, log_df_dz):
         n_iters = 100
         x = z.clone()
+        logdet_fn = self.prepare_logdet_estimator()
 
         with torch.enable_grad():
             x.requires_grad_(True)
             for k in range(n_iters):
+                x = safe_detach(x)
                 g = self.g_fn(x)
                 x, prev_x = z - g, x
 
                 if torch.all(torch.abs(x - prev_x) < self.ftol):
                     break
 
-            logdet = torch.zeros_like(log_df_dz)
-            _, logdet = self.forward(x, logdet)
+            x = safe_detach(x)
+            g = self.g_fn(x)
+            logdet = logdet_fn(g, x)
 
         return x, log_df_dz - logdet
 

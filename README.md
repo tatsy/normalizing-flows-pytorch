@@ -10,6 +10,8 @@ Models
 
 Currently, following networks are implemented.
 
+* Planar flow
+  * Rezende and Mohamed 2015, "Variational Inference with Normalizing Flows," [[arXiv]](https://arxiv.org/abs/1505.05770)
 * RealNVP
   * Dinh et al., 2016, "Density Estimation using Real NVP," [[arXiv]](https://arxiv.org/abs/1605.08803)
 * Glow
