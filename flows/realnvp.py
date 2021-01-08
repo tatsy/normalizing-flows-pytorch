@@ -40,20 +40,11 @@ class RealNVP(nn.Module):
                 layers.append(BatchNorm(mid_dims, affine=False))
                 layers.append(AffineCoupling(mid_dims, masking='checkerboard', odd=i % 2 != 0))
 
+            # restore to original scale
             while mid_dims[1] != dims[1] or mid_dims[2] != dims[2]:
-                # channel-wise masking
-                # for i in range(self.n_layers):
-                #     layers.append(BatchNorm(mid_dims, affine=False))
-                #     layers.append(AffineCoupling(mid_dims, masking='channelwise', odd=i % 2 != 0))
-
                 # unsqueeze
                 layers.append(Unsqueeze2d(odd=False))
                 mid_dims = (mid_dims[0] // 4, mid_dims[1] * 2, mid_dims[2] * 2)
-
-                # checkerboard masking
-                # for i in range(self.n_layers):
-                #     layers.append(BatchNorm(mid_dims, affine=False))
-                #     layers.append(AffineCoupling(mid_dims, masking='checkerboard', odd=i % 2 != 0))
 
         else:
             # for density samples

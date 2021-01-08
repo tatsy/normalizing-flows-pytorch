@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
 
-from .glow import InvertibleConv1x1
-from .modules import Logit, ActNorm, Compose
+from .modules import Logit, ActNorm, Compose, InvertibleConv1x1
 from .squeeze import Squeeze2d, Unsqueeze2d
 from .coupling import MixLogAttnCoupling
 
@@ -47,7 +46,7 @@ class Flowpp(nn.Module):
                                            n_mixtures=cfg.mixtures))
 
             # checkerboard masking (lowest resolution)
-            for i in range(self.n_layers):
+            for i in range(self.n_layers + 1):
                 layers.append(ActNorm(mid_dims))
                 layers.append(InvertibleConv1x1(mid_dims[0]))
                 layers.append(
@@ -56,28 +55,11 @@ class Flowpp(nn.Module):
                                        odd=i % 2 != 0,
                                        n_mixtures=cfg.mixtures))
 
+            # restore to original scale
             while mid_dims[1] != dims[1] or mid_dims[2] != dims[2]:
-                # channel-wise masking
-                # for i in range(self.n_layers):
-                #     layers.append(ActNorm(mid_dims))
-                #     layers.append(
-                #         MixLogAttnCoupling(mid_dims,
-                #                            masking='channelwise',
-                #                            odd=i % 2 != 0,
-                #                            n_mixtures=cfg.mixtures))
-
                 # unsqueeze
                 layers.append(Unsqueeze2d(odd=False))
                 mid_dims = (mid_dims[0] // 4, mid_dims[1] * 2, mid_dims[2] * 2)
-
-                # checkerboard masking
-                # for i in range(self.n_layers):
-                #     layers.append(ActNorm(mid_dims))
-                #     layers.append(
-                #         MixLogAttnCoupling(mid_dims,
-                #                            masking='checkerboard',
-                #                            odd=i % 2 != 0,
-                #                            n_mixtures=cfg.mixtures))
 
         else:
             # for density samples

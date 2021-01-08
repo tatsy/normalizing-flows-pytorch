@@ -31,22 +31,33 @@ def get_checker_mask(H, W, odd=False, device=None):
 
 def checker_split(z, odd=False):
     assert z.dim() == 4
+    B, C, H, W = z.size()
 
-    _, _, H, W = z.size()
-    mask = get_checker_mask(H, W, odd)
-
-    z0 = z * mask
-    z1 = z * (1.0 - mask)
+    z = z.view(B, C, H // 2, 2, W // 2, 2)  # (B, C, sH, 2, sW, 2)
+    z = z.permute(0, 1, 3, 5, 2, 4).contiguous()  # (B, C, 2, 2, sH, sW)
+    z = z.view(B, C * 4, H // 2, W // 2)  # (B, C * 4, sH, sW)
+    za, zb, zc, zd = torch.split(z, C, dim=1)
+    z0 = torch.cat([za, zd], dim=1)
+    z1 = torch.cat([zb, zc], dim=1)
+    if odd:
+        z0, z1 = z1, z0
     return z0, z1
 
 
 def checker_merge(z0, z1, odd=False):
     assert z0.dim() == 4 and z1.dim() == 4
+    B, C2, sH, sW = z0.size()
+    C = C2 // 2
 
-    _, _, H, W = z0.size()
-    mask = get_checker_mask(H, W, odd)
+    if odd:
+        z0, z1 = z1, z0
 
-    z = z0 * mask + z1 * (1.0 - mask)
+    za, zd = torch.split(z0, C, dim=1)
+    zb, zc = torch.split(z1, C, dim=1)
+    z = torch.cat([za, zb, zc, zd], dim=1)
+
+    z = z.view(B, C, 2, 2, sH, sW).permute(0, 1, 4, 2, 5, 3).contiguous()
+    z = z.view(B, C, sH * 2, sW * 2)
     return z
 
 
