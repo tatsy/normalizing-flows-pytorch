@@ -6,4 +6,4 @@ layers: 3
 stepsize: 0.1
 solver: rk4
 backprop: adjoint
-trace: exact
+trace: approx

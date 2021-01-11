@@ -3,6 +3,7 @@ normalizing flows
 ---
 MIT License (c) 2020, Tatsuya Yatagawa
 """
+from .maf import MAF
 from .glow import Glow
 from .ffjord import Ffjord
 from .flowpp import Flowpp
@@ -15,6 +16,7 @@ __all__ = [
     'RealNVP',
     'Glow',
     'Flowpp',
+    'MAF',
     'ResFlow',
     'Ffjord',
 ]

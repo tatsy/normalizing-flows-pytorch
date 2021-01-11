@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-from flows import Glow, Ffjord, Flowpp, RealNVP, ResFlow, PlanarFlow
+from flows import MAF, Glow, Ffjord, Flowpp, RealNVP, ResFlow, PlanarFlow
 from flows.misc import anomaly_hook
 from common.utils import image_plot, save_image, scatter_plot
 from flows.dataset import FlowDataLoader
@@ -21,6 +21,7 @@ networks = {
     'realnvp': RealNVP,
     'glow': Glow,
     'flow++': Flowpp,
+    'maf': MAF,
     'resflow': ResFlow,
     'ffjord': Ffjord,
 }

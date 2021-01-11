@@ -16,10 +16,12 @@ Currently, following networks are implemented.
   * Dinh et al., 2016, "Density Estimation using Real NVP," [[arXiv]](https://arxiv.org/abs/1605.08803)
 * Glow
   * Kingma and Dhariwal 2018, "Glow: Generative Flow with Invertible 1x1 Convolutions," [[arXiv]](https://arxiv.org/abs/1807.03039v2) [[code]](https://github.com/openai/glow)
-* Residual Flow
-  * Behrmann et al., 2018, "Residual Flows for Invertible Generative Modeling," [[arXiv]](https://arxiv.org/abs/1906.02735) [[code]](https://github.com/rtqichen/residual-flows)
 * Flow++
   * Ho et al., 2019, "Flow++: Improving Flow-Based Generative Models with Variational Dequantization and Architecture Design," [[arXiv]](https://arxiv.org/abs/1902.00275) [[code]](https://github.com/aravindsrinivas/flowpp)
+* MAF
+  * Papamakarios et al., 2017, “Masked Autoregressive Flow for Density Estimation,” [[arXiv]](https://arxiv.org/abs/1705.07057)
+* Residual Flow
+  * Behrmann et al., 2018, "Residual Flows for Invertible Generative Modeling," [[arXiv]](https://arxiv.org/abs/1906.02735) [[code]](https://github.com/rtqichen/residual-flows)
 * FFJORD
   * Grathwohl et al., 2018, "FFJORD: Free-form Continuous Dynamics for Scalable Reversible Generative Models," [[arXiv]](https://arxiv.org/abs/1810.01367) [[code]](https://github.com/rtqichen/ffjord)
 
