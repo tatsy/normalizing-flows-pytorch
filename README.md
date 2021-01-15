@@ -57,10 +57,20 @@ $ python main.py \
 **Note:**
 Currently, I tested the networks only for 2D density transformation. So, results for 3D densities (`swiss` and `s_curve`) and images (`mnist` and `cifar10`) could be what you expect.
 
-Screen shots
+Results
 ---
 
-Comming soon...
+See [`results/README.md`](./results/README.md) for more results.
+
+### Real NVP
+
+| Target | Reproduced | Training |
+|:--------:|:------------:|:----:|
+| ![](./results/density/realnvp/y_data_020000.jpg) | ![](./results/density/realnvp/y_sample_020000.jpg) | ![](./results/density/realnvp/movie.gif) |
+
+
+
+
 
 Copyright
 ---
