@@ -61,21 +61,27 @@ class AdaptiveODESolver(object):
         self.atol = atol
         self.rtol = rtol
         self.order = -1
-        self.c_time = None
+        self.c_t = None
         self.c_x = None
         self.c_err = None
 
     def integrate(self, x0, times):
         t_start = times[0]
         t_end = times[-1]
-        dt = (t_end - t_start) / len(times)
+        dt = (t_end - t_start) / (len(times) - 1)
+        dt_min = torch.abs(dt) * 0.2
+        dt_max = torch.abs(dt) * 5.0
 
         # adaptive integration
         x1 = x0
         t0 = t_start
         t1 = t_start
-        while (t1 - t_end) * (t1 - dt - t_end) > 0.0:
-            dx, dt = self._step_fn(t1, x1, dt)
+        while abs(t1 - t_end) > 1.0e-4:
+            dx, _ = self._step_fn(t1, x1, dt)
+            dt = torch.clamp(torch.abs(dt), dt_min, dt_max) * torch.sign(dt)
+            if (t_start - (t1 + dt)) * (t_end - (t1 + dt)) > 0.0:
+                dt = t_end - t1
+
             x0 = x1
             t0 = t1
             x1 = x1 + dx
@@ -92,17 +98,39 @@ class AdaptiveODESolver(object):
         ks = [k0]
         for i in range(self.order + 1):
             kx = sum([k * c for k, c in zip(ks, self.c_x[i])])
-            ki = dt * self.func(t + self.c_time[i] * dt, x + kx)
+            ki = dt * self.func(t + self.c_t[i] * dt, x + kx)
             ks.append(ki)
 
         dx = sum([k * c for k, c in zip(ks, self.c_x[-1])])
         x_err = sum([k * c for k, c in zip(ks, self.c_err)])
 
         etol = self.atol + self.rtol * torch.max(x.abs(), (x + dx).abs())
-        err_norm = (x_err / etol).pow(2).mean().add_(1.0e-6).sqrt()
+        err_norm = (x_err / etol).pow(2).mean().sqrt()
         dt_new = dt * (0.5 / err_norm)**(1.0 / self.order)
 
         return dx, dt_new
+
+
+class Bosha3(AdaptiveODESolver):
+    """
+    Adaptive step size Bogacki-Shampine method
+    """
+    def __init__(self, func, rtol=1.0e-3, atol=1.0e-3):
+        super(Bosha3, self).__init__(func, rtol, atol)
+        self.order = 3
+        self.c_t = [1.0 / 2.0, 3.0 / 4.0, 1.0, 1.0]
+        self.c_x = [
+            [1.0 / 2.0],
+            [0.0, 3.0 / 4.0],
+            [2.0 / 9.0, 1.0 / 3.0, 4.0 / 9.0],
+            [2.0 / 9.0, 1.0 / 3.0, 4.0 / 9.0, 0.0],
+        ]
+        self.c_err = [
+            2.0 / 9.0 - 7.0 / 24.0,
+            1.0 / 3.0 - 1.0 / 4.0,
+            4.0 / 9.0 - 1.0 / 3.0,
+            0.0 - 1.0 / 8.0,
+        ]
 
 
 class Dopri5(AdaptiveODESolver):
@@ -112,7 +140,7 @@ class Dopri5(AdaptiveODESolver):
     def __init__(self, func, rtol=1.0e-2, atol=1.0e-2):
         super(Dopri5, self).__init__(func, rtol, atol)
         self.order = 5
-        self.c_time = [1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0, 1.0]
+        self.c_t = [1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0, 1.0]
         self.c_x = [
             [1.0 / 5.0],
             [3.0 / 40.0, 9.0 / 40.0],
@@ -135,6 +163,7 @@ class Dopri5(AdaptiveODESolver):
 SOLVERS = {
     'midpoint': Midpoint,
     'rk4': RK4,
+    'bosha3': Bosha3,
     'dopri5': Dopri5,
 }
 

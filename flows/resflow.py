@@ -25,7 +25,7 @@ class ResFlow(nn.Module):
                     InvertibleResLinear(dims[0],
                                         dims[0],
                                         coeff=cfg.spnorm_coeff,
-                                        logdet_estimate_method=cfg.logdet))
+                                        logdet_estimator=cfg.logdet))
 
         self.net = Compose(layers)
 

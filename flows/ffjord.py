@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.autograd
 
 from .cnf import CNF
-from .modules import Compose, BatchNorm
+from .modules import ActNorm, Compose
 
 
 class Ffjord(nn.Module):
@@ -27,10 +27,9 @@ class Ffjord(nn.Module):
         else:
             # for density samples
             for i in range(self.n_layers):
-                layers.append(BatchNorm(dims))
+                layers.append(ActNorm(dims))
                 layers.append(
-                    CNF(dims, times=times, solver_type=cfg.solver,
-                        trace_estimate_method=cfg.trace))
+                    CNF(dims, times=times, solver_type=cfg.solver, trace_estimator=cfg.trace))
 
         self.net = Compose(layers)
 

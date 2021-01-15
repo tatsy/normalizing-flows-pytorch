@@ -4,6 +4,6 @@ t0: 0
 t1: 1
 layers: 3
 stepsize: 0.1
-solver: rk4
+solver: dopri5
 backprop: adjoint
-trace: approx
+trace: hutchinson
