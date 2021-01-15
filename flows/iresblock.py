@@ -123,6 +123,7 @@ class MemorySavedLogDetEstimator(torch.autograd.Function):
             x = x.detach().requires_grad_(True)
             theta = list(g_params)
 
+            # log-det for neumann series
             g = g_fn(x)
             ctx.x = x
             ctx.g = g
@@ -134,6 +135,7 @@ class MemorySavedLogDetEstimator(torch.autograd.Function):
                                                                       allow_unused=True)
                 ctx.save_for_backward(dlogdetJg_dx, *theta, *dlogdetJg_dtheta)
 
+            # log-det for loss calculation
             logdet = logdet_fn(g, x)
 
         return safe_detach(g), safe_detach(logdet)
