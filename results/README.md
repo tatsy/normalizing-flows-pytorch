@@ -28,7 +28,7 @@ Results
 
 | Target | Reproduced | Training |
 |:--------:|:------------:|:----:|
-| ![](./density/ffjord/y_data_020000.jpg) | ![](./density/ffjord/y_sample_020000.jpg) | ![](./density/ffjord/movie.gif) |
+| ![](./density/maf/y_data_020000.jpg) | ![](./density/maf/y_sample_020000.jpg) | ![](./density/maf/movie.gif) |
 
 
 ### Residual Flow
@@ -43,5 +43,3 @@ Results
 | Target | Reproduced | Training |
 |:--------:|:------------:|:----:|
 | ![](./density/ffjord/y_data_020000.jpg) | ![](./density/ffjord/y_sample_020000.jpg) | ![](./density/ffjord/movie.gif) |
-
-## Image Generation
